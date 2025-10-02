@@ -7,6 +7,19 @@ on:
         description: "Imagem da aplicação para deploy"
         required: true
         type: string
+        default: ghcr.io/mana-food-clean-architecture:latest
+      deployment:
+        description: "Deployment Kubernetes a atualizar"
+        required: true
+        default: "mana-food"
+      container:
+        description: "Container dentro do deployment a atualizar"
+        required: true
+        default: "mana-food"
+      namespace:
+        description: "Namespace Kubernetes"
+        required: true
+        default: "default"
 
 jobs:
   terraform:
@@ -45,22 +58,28 @@ jobs:
     runs-on: ubuntu-latest
     needs: terraform
     steps:
-      - name: Checkout
+      - name: Checkout Infra Repo
         uses: actions/checkout@v4
 
-      - name: Configurar credenciais AWS
+      - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_SECRET_REGION }}
 
-      - name: Configurar kubectl
+      - name: Configure kubectl
         run: |
-          aws eks update-kubeconfig --region us-east-1 --name meu-cluster-eks
+          aws eks update-kubeconfig --region ${{ secrets.AWS_SECRET_REGION }} --name meu-cluster-eks
 
       - name: Deploy no Kubernetes
         run: |
-          echo "Fazendo deploy da imagem ${{ github.event.inputs.image }}"
-          kubectl set image deployment/my-app my-app=${{ github.event.inputs.image }}
-          kubectl rollout status deployment/my-app
+          echo "Deploying image ${{ github.event.inputs.image }} to deployment ${{ github.event.inputs.deployment }} in namespace ${{ github.event.inputs.namespace }}"
+          kubectl get deployment ${{ github.event.inputs.deployment }} -n ${{ github.event.inputs.namespace }} || exit 1
+          kubectl set image deployment/${{ github.event.inputs.deployment }} \
+            ${{ github.event.inputs.container }}=${{ github.event.inputs.image }} \
+            -n ${{ github.event.inputs.namespace }} --record
+          kubectl rollout status deployment/${{ github.event.inputs.deployment }} \
+            -n ${{ github.event.inputs.namespace }} --timeout=120s || \
+            kubectl rollout undo deployment/${{ github.event.inputs.deployment }} \
+            -n ${{ github.event.inputs.namespace }}
