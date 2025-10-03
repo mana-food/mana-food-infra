@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: manafood-api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: manafood-api
+  template:
+    metadata:
+      labels:
+        app: manafood-api
+    spec:
+      containers:
+        - name: manafood-api
+          image: manafood-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: manafood-config
+            - secretRef:
+                name: manafood-secrets
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
