@@ -18,8 +18,14 @@ output "vpc_id" {
   value = module.vpc.vpc_id
 }
 
+### API Gateway outputs
+
 output "api_id" {
   value = module.api_gateway.api_id
+}
+
+output "api_invoke_url" {
+  value = module.api_gateway.invoke_url
 }
 
 output "eks_endpoint" {
