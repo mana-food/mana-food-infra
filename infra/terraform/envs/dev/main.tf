@@ -70,11 +70,13 @@ module "api_gateway" {
 
 # Lambda
 module "lambda" {
-  source   = "../../modules/lambda"
-  name     = "meu-lambda-dev"
-  runtime  = "python3.9"
-  handler  = "index.handler"
-  filename = "lambda.zip"
+  source      = "../../modules/lambda"
+  name        = "meu-lambda-dotnet-dev"
+  runtime     = "dotnet9"
+  handler     = "MeuProjeto::MeuProjeto.Function::FunctionHandler"
+  filename    = "lambda-dotnet.zip"
+  timeout     = 10
+  memory_size = 256
 }
 
 # Aurora
