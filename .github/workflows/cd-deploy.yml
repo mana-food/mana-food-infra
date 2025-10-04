@@ -159,7 +159,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tfplan-prod
-          path: './terraform'/tfplan-prod
+          path: ./terraform/tfplan-prod
           retention-days: 30
 
   terraform-apply-prod:
