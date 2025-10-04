@@ -89,10 +89,12 @@ module "aurora" {
 
 resource "kubernetes_manifest" "api_configmap" {
   manifest = yamldecode(file("${path.module}/../../../k8s/api-configmap.yaml"))
+  # namespace = "default" # descomente se quiser forçar o namespace
 }
 
 resource "kubernetes_manifest" "api_secret" {
   manifest = yamldecode(file("${path.module}/../../../k8s/api-secret.yaml"))
+  # namespace = "default"
 }
 
 resource "kubernetes_manifest" "api_deployment" {
@@ -101,6 +103,7 @@ resource "kubernetes_manifest" "api_deployment" {
     kubernetes_manifest.api_configmap,
     kubernetes_manifest.api_secret
   ]
+  # namespace = "default"
 }
 
 resource "kubernetes_manifest" "api_service" {
@@ -108,6 +111,7 @@ resource "kubernetes_manifest" "api_service" {
   depends_on = [
     kubernetes_manifest.api_deployment
   ]
+  # namespace = "default"
 }
 
 resource "kubernetes_manifest" "api_hpa" {
@@ -115,4 +119,5 @@ resource "kubernetes_manifest" "api_hpa" {
   depends_on = [
     kubernetes_manifest.api_deployment
   ]
+  # namespace = "default"
 }
