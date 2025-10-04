@@ -69,59 +69,29 @@ resource "aws_cloudwatch_log_group" "lambda" {
 # Lambda Function
 resource "aws_lambda_function" "main" {
   function_name = var.function_name
-  description   = var.description
   role          = aws_iam_role.lambda.arn
+  runtime       = var.runtime
+  handler       = var.handler
 
-  filename         = var.source_path != "" ? data.archive_file.lambda[0].output_path : null
-  source_code_hash = var.source_path != "" ? data.archive_file.lambda[0].output_base64sha256 : null
-
-  handler = var.handler
-  runtime = var.runtime
+  filename         = try(data.archive_file.lambda[0].output_path, null)
+  source_code_hash = try(data.archive_file.lambda[0].output_base64sha256, null)
 
   memory_size = var.memory_size
   timeout     = var.timeout
 
-  reserved_concurrent_executions = var.reserved_concurrent_executions
+  vpc_config = var.vpc_config != null ? {
+    subnet_ids         = var.vpc_config.subnet_ids
+    security_group_ids = var.vpc_config.security_group_ids
+  } : null
 
   environment {
     variables = var.environment_variables
   }
 
-  dynamic "vpc_config" {
-    for_each = var.vpc_config != null ? [var.vpc_config] : []
-    content {
-      subnet_ids         = vpc_config.value.subnet_ids
-      security_group_ids = vpc_config.value.security_group_ids
-    }
-  }
-
-  dynamic "dead_letter_config" {
-    for_each = var.dead_letter_target_arn != "" ? [1] : []
-    content {
-      target_arn = var.dead_letter_target_arn
-    }
-  }
-
-  dynamic "tracing_config" {
-    for_each = var.tracing_mode != null ? [1] : []
-    content {
-      mode = var.tracing_mode
-    }
-  }
-
-  layers = var.layers
-
   tags = merge(
     var.tags,
-    {
-      Name = var.function_name
-    }
+    { Name = var.function_name }
   )
-
-  depends_on = [
-    aws_cloudwatch_log_group.lambda,
-    aws_iam_role_policy_attachment.lambda_basic_execution
-  ]
 }
 
 # Lambda Alias

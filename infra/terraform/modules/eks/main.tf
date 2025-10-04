@@ -85,18 +85,18 @@ resource "aws_eks_cluster" "main" {
   tags = var.tags
 }
 
-# OIDC Provider
-data "tls_certificate" "cluster" {
-  url = aws_eks_cluster.main.identity[0].oidc[0].issuer
-}
-
-resource "aws_iam_openid_connect_provider" "cluster" {
-  client_id_list  = ["sts.amazonaws.com"]
-  thumbprint_list = [data.tls_certificate.cluster.certificates[0].sha1_fingerprint]
-  url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
-
-  tags = var.tags
-}
+# # OIDC Provider
+# data "tls_certificate" "cluster" {
+#   url = aws_eks_cluster.main.identity[0].oidc[0].issuer
+# }
+#
+# resource "aws_iam_openid_connect_provider" "cluster" {
+#   client_id_list  = ["sts.amazonaws.com"]
+#   thumbprint_list = [data.tls_certificate.cluster.certificates[0].sha1_fingerprint]
+#   url             = aws_eks_cluster.main.identity[0].oidc[0].issuer
+#
+#   tags = var.tags
+# }
 
 # IAM Role para Node Groups
 resource "aws_iam_role" "node_group" {
@@ -230,7 +230,7 @@ resource "aws_eks_node_group" "main" {
 
   lifecycle {
     create_before_destroy = true
-    ignore_changes        = [scaling_config[0].desired_size]
+    ignore_changes        = [scaling_config]
   }
 }
 
@@ -275,4 +275,9 @@ resource "aws_eks_addon" "aws_ebs_csi_driver" {
   resolve_conflicts_on_update = "PRESERVE"
 
   tags = var.tags
+}
+
+# Outputs necessários para referência externa
+output "node_group_security_group_id" {
+  value = aws_security_group.node_group.id
 }

@@ -142,3 +142,12 @@ variable "lambda_timeout" {
   type        = number
   default     = 30
 }
+
+variable "vpc_config" {
+  description = "Configuração opcional de VPC para a função Lambda"
+  type = object({
+    subnet_ids         = list(string)
+    security_group_ids = list(string)
+  })
+  default = null
+}
