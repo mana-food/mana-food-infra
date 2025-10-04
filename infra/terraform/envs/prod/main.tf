@@ -10,7 +10,6 @@ terraform {
     bucket         = "manafood-terraform-tfstate"     # nome do bucket que você criou
     key            = "manafood-terraform.tfstate"     # caminho do arquivo no bucket
     region         = "us-east-1"                      # região do bucket
-    dynamodb_table = "manafood-terraform-locks"       # tabela para lock
     encrypt        = true                             # criptografa o estado no S3
   }
 }
@@ -38,7 +37,6 @@ module "vpc" {
   source             = "../../modules/vpc"
   name               = "manafood-vpc"
   cidr_block         = "10.0.0.0/16"
-  subnets            = var.subnets
   public_subnets     = ["10.0.1.0/24", "10.0.2.0/24"]
   availability_zones = ["us-east-1"]
 }
