@@ -311,6 +311,14 @@ jobs:
             ${{ github.event.inputs.container || 'mana-food' }}=${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }} \
             -n ${{ github.event.inputs.namespace || 'default' }}
 
+      - name: Aplicar manifestos Kubernetes
+        run: |
+          kubectl apply -f infra/k8s/api-configmap.yaml
+          kubectl apply -f infra/k8s/api-secret.yaml
+          kubectl apply -f infra/k8s/api-service.yaml
+          kubectl apply -f infra/k8s/api-hpa.yaml
+          kubectl apply -f infra/k8s/api-deployment.rendered.yaml
+
       - name: Verificar rollout
         run: |
           kubectl rollout status deployment/${{ github.event.inputs.deployment || 'mana-food' }} \

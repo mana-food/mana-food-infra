@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: manafood-api
-          image: manafood-api:latest
+          image: ghcr.io/mana-food-clean-architecture:latest
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
