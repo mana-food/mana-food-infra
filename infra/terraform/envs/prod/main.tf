@@ -33,45 +33,38 @@ provider "kubernetes" {
   token                  = data.aws_eks_cluster_auth.eks.token
 }
 
-# # VPC
-# module "vpc" {
-#   source = "../../modules/eks"
-#   name   = "vpc-dev"
-#   subnets = var.subnets
-# }
-#
 # VPC
 module "vpc" {
   source             = "../../modules/vpc"
-  name               = "dev-vpc"
+  name               = "manafood-vpc"
   cidr_block         = "10.0.0.0/16"
   subnets            = var.subnets
   public_subnets     = ["10.0.1.0/24", "10.0.2.0/24"]
-  availability_zones = ["us-east-1a", "us-east-1b"]
+  availability_zones = ["us-east-1"]
 }
 
 # EKS
 module "eks" {
   source           = "../../modules/eks"
-  cluster_name     = "dev-eks-cluster"
+  cluster_name     = "manafood-eks-cluster"
   cluster_role_arn = var.eks_cluster_role_arn
   node_role_arn    = var.eks_node_role_arn
   subnet_ids       = module.vpc.public_subnet_ids
   # subnets = var.subnets
 }
 
-# API Gateway
-module "api_gateway" {
-  source      = "../../modules/gateway"
-  name        = "dev-api"
-  path_part   = "hello"
-  description = "API para ambiente dev"
-}
+# # API Gateway
+# module "api_gateway" {
+#   source      = "../../modules/gateway"
+#   name        = "manafood-api-gateway"
+#   path_part   = "hello"
+#   description = "API para ambiente de produção"
+# }
 
 # Lambda
 module "lambda" {
   source      = "../../modules/lambda"
-  name        = "meu-lambda-dotnet-dev"
+  name        = "manafood-lambda-dotnet"
   runtime     = "dotnet9"
   handler     = "MeuProjeto::MeuProjeto.Function::FunctionHandler"
   filename    = "lambda-dotnet.zip"
@@ -82,7 +75,7 @@ module "lambda" {
 # Aurora
 module "aurora" {
   source             = "../../modules/aurora"
-  cluster_identifier = "aurora-dev"
+  cluster_identifier = "manafood-bd-aurora"
   db_username        = var.db_username
   db_password        = var.db_password
   subnet_ids         = module.vpc.public_subnet_ids
@@ -90,12 +83,6 @@ module "aurora" {
   instance_count     = 1
   instance_class     = "db.t3.medium"
   publicly_accessible = false
-}
-
-# API Gateway
-module "api_gateway" {
-  source = "../../modules/gateway"
-  name   = "api-dev"
 }
 
 ### Kubernetes Resources
