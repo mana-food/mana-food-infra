@@ -36,7 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: './terraform'
+        working-directory: infra/terraform/envs/prod
 
     steps:
       - name: Checkout código
@@ -94,6 +94,9 @@ jobs:
     name: 'Security Scan'
     runs-on: ubuntu-latest
     needs: terraform-validate
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/prod
 
     steps:
       - name: Checkout código
@@ -102,7 +105,7 @@ jobs:
       - name: Run tfsec
         uses: aquasecurity/tfsec-action@v1.0.3
         with:
-          working_directory: './terraform'
+          working_directory: infra/terraform/envs/prod
           soft_fail: true
           format: sarif
           additional_args: --minimum-severity MEDIUM
@@ -121,7 +124,7 @@ jobs:
     environment: production
     defaults:
       run:
-        working-directory: './terraform'
+        working-directory: infra/terraform/envs/prod
 
     steps:
       - name: Checkout código
@@ -172,7 +175,7 @@ jobs:
       url: https://example.com
     defaults:
       run:
-        working-directory: './terraform'
+        working-directory: infra/terraform/envs/prod
 
     steps:
       - name: Checkout código
@@ -203,7 +206,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: tfplan-prod
-          path: './terraform'
+          path: infra/terraform/envs/prod
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan-prod
@@ -234,7 +237,7 @@ jobs:
       name: production
     defaults:
       run:
-        working-directory: './terraform'
+        working-directory: infra/terraform/envs/prod
 
     steps:
       - name: Checkout código
