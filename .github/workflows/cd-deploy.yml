@@ -137,9 +137,12 @@ jobs:
             -out=tfplan-prod \
             -no-color
         env:
-          TF_VAR_db_master_username: ${{ secrets.db_master_username }}
-          TF_VAR_db_master_password: ${{ secrets.TF_VAR_db_password }}
-          TF_VAR_bucket_state_name: ${{ secrets.bucket_state_name }}
+          TF_VAR_aws_region: ${{ secrets.AWS_SECRET_REGION }}
+          TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
+          TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
+          TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
+          TF_VAR_project_name: "mana-food"
+          TF_VAR_eks_cluster_name: "mana-food-eks"
 
       - name: Salvar plano
         uses: actions/upload-artifact@v4
@@ -213,9 +216,12 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan-prod
         env:
-          TF_VAR_db_master_username: ${{ secrets.db_master_username }}
-          TF_VAR_db_master_password: ${{ secrets.TF_VAR_db_password }}
-          TF_VAR_bucket_state_name: ${{ secrets.bucket_state_name }}
+          TF_VAR_aws_region: ${{ secrets.AWS_SECRET_REGION }}
+          TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
+          TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
+          TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
+          TF_VAR_project_name: "mana-food"
+          TF_VAR_eks_cluster_name: "mana-food-eks"
 
       - name: Terraform Output
         id: output
