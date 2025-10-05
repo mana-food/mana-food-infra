@@ -5,10 +5,17 @@ variable "aws_region" {
 }
 
 variable "project_name" {
-  description = "Nome base para os recursos."
+  description = "Nome do projeto."
   type        = string
-  default     = "dotnet-app"
+  default     = "manafood"
 }
+
+variable "eks_cluster_name" {
+  description = "Nome base para o recurso eks cluster"
+  type        = string
+  default     = "manafood-eks"
+}
+
 
 variable "db_master_username" {
   description = "Nome de usuário mestre do Aurora."
@@ -28,30 +35,45 @@ variable "bucket_state_name" {
   sensitive   = true
 }
 
-variable "projectName" {
-  default = "eks-manafood"
+
+variable "policy_eks_cluster" {
+  type        = string
+  sensitive   = true
+  default     = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
 }
 
-variable "labRole" {
-  default = "arn:aws:iam::239569854352:role/LabRole"
+variable "policy_eks_service" {
+  type        = string
+  sensitive   = true
+  default     = "arn:aws:iam::aws:policy/AmazonEKSServicePolicy"
 }
 
-variable "accessConfig" {
-  default = "API_AND_CONFIG_MAP"
+variable "policy_eks_worker" {
+  type        = string
+  sensitive   = true
+  default     = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
 }
 
-variable "nodeGroup" {
-  default = "manafood-node-group"
+variable "policy_vpc" {
+  type        = string
+  sensitive   = true
+  default     = "arn:aws:iam::aws:policy/AmazonVPCFullAccess"
 }
 
-variable "instanceType" {
-  default = "t3.medium"
+variable "policy_rds" {
+  type        = string
+  sensitive   = true
+  default     = "arn:aws:iam::aws:policy/AmazonRDSFullAccess"
 }
 
-variable "principalArn" {
-  default = "arn:aws:iam::239569854352:role/voclabs"
+variable "policy_lambda" {
+  type        = string
+  sensitive   = true
+  default     = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
 }
 
-variable "policyArn" {
-  default = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+variable "policy_iam_readonly" {
+  type        = string
+  sensitive   = true
+  default     = "arn:aws:iam::aws:policy/IAMReadOnlyAccess"
 }

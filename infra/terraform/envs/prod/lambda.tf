@@ -16,12 +16,6 @@ resource "aws_iam_role" "lambda_exec" {
   })
 }
 
-# Policy de acesso à VPC e Logs
-resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
-  role       = aws_iam_role.lambda_exec.name
-  policy_arn = var.labRole
-}
-
 # Acesso ao S3 para artefatos
 data "aws_s3_bucket" "code_bucket" {
   bucket = var.bucket_state_name

@@ -1,3 +1,12 @@
+# # Busca os dados do cluster EKS existente
+# data "aws_eks_cluster" "eks" {
+#   name = var.eks_cluster_name
+# }
+#
+# data "aws_eks_cluster_auth" "eks" {
+#   name = data.aws_eks_cluster.eks.name
+# }
+
 # Provedor Kubernetes: Depende da criação do EKS para obter as credenciais
 data "aws_eks_cluster_auth" "cluster" {
   name = module.eks.cluster_id

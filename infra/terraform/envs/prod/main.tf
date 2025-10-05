@@ -57,3 +57,52 @@ resource "kubernetes_manifest" "api_hpa" {
   ]
   # namespace = "default"
 }
+
+resource "aws_iam_user" "manafood_terraform" {
+  name = "manafood-terraform"
+}
+
+# EKS
+resource "aws_iam_user_policy_attachment" "eks_cluster" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = var.policy_eks_cluster
+}
+
+resource "aws_iam_user_policy_attachment" "eks_service" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = var.policy_eks_service
+}
+
+resource "aws_iam_user_policy_attachment" "eks_worker" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = var.policy_eks_worker
+}
+
+# VPC
+resource "aws_iam_user_policy_attachment" "vpc" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = var.policy_vpc
+}
+
+# RDS (Aurora MySQL)
+resource "aws_iam_user_policy_attachment" "rds" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = var.policy_rds
+}
+
+# Lambda
+resource "aws_iam_user_policy_attachment" "lambda" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = var.policy_lambda
+}
+
+# IAM - somente leitura
+resource "aws_iam_user_policy_attachment" "iam_readonly" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = var.policy_iam_readonly
+}
+
+resource "aws_iam_user_policy_attachment" "eks_worker_policy" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+}
