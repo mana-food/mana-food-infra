@@ -77,3 +77,9 @@ variable "policy_iam_readonly" {
   sensitive   = true
   default     = "arn:aws:iam::aws:policy/IAMReadOnlyAccess"
 }
+
+variable "create_k8s_resources" {
+  description = "If true, create Kubernetes resources (ConfigMap, Secret, Deployment, Service, HPA). Toggle to false to create infra only."
+  type        = bool
+  default     = false
+}

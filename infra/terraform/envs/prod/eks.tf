@@ -3,7 +3,7 @@ module "eks" {
   version = "20.1.0"
 
   cluster_name    = "${var.project_name}-eks"
-  cluster_version = "1.27"
+  cluster_version = "1.32"
 
   # Referencia as subnets criadas no módulo VPC
   vpc_id                   = module.vpc.vpc_id

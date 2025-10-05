@@ -24,42 +24,47 @@ terraform {
 ### Kubernetes Resources
 
 resource "kubernetes_manifest" "api_configmap" {
+  count = var.create_k8s_resources ? 1 : 0
+  depends_on = [module.eks]
   manifest = yamldecode(file("${path.module}/../../../k8s/api-configmap.yaml"))
-  # namespace = "default" # descomente se quiser forçar o namespace
 }
 
 resource "kubernetes_manifest" "api_secret" {
+  count = var.create_k8s_resources ? 1 : 0
+  depends_on = [module.eks]
   manifest = yamldecode(file("${path.module}/../../../k8s/api-secret.yaml"))
-  # namespace = "default"
 }
 
 resource "kubernetes_manifest" "api_deployment" {
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-deployment.yaml"))
+  count = var.create_k8s_resources ? 1 : 0
   depends_on = [
-    kubernetes_manifest.api_configmap,
-    kubernetes_manifest.api_secret
+    kubernetes_manifest.api_configmap[0],
+    kubernetes_manifest.api_secret[0]
   ]
-  # namespace = "default"
+  manifest = yamldecode(file("${path.module}/../../../k8s/api-deployment.yaml"))
 }
 
 resource "kubernetes_manifest" "api_service" {
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-service.yaml"))
+  count = var.create_k8s_resources ? 1 : 0
   depends_on = [
-    kubernetes_manifest.api_deployment
+    kubernetes_manifest.api_deployment[0]
   ]
-  # namespace = "default"
+  manifest = yamldecode(file("${path.module}/../../../k8s/api-service.yaml"))
 }
 
 resource "kubernetes_manifest" "api_hpa" {
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-hpa.yaml"))
+  count = var.create_k8s_resources ? 1 : 0
   depends_on = [
-    kubernetes_manifest.api_deployment
+    kubernetes_manifest.api_deployment[0]
   ]
-  # namespace = "default"
+  manifest = yamldecode(file("${path.module}/../../../k8s/api-hpa.yaml"))
 }
-
 resource "aws_iam_user" "manafood_terraform" {
   name = "manafood-terraform"
+}
+resource "aws_iam_user_policy_attachment" "administrator_access" {
+  user       = aws_iam_user.manafood_terraform.name
+  policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
 # EKS
