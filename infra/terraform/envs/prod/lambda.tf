@@ -54,7 +54,7 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
 resource "aws_lambda_function" "dotnet_lambda" {
   function_name = "${var.project_name}-api-lambda"
   role          = aws_iam_role.lambda_exec.arn
-  handler       = "Bootstrap"  # Para .NET 8
+  handler       = "Bootstrap"  
   runtime       = "dotnet8"
   timeout       = 30
   memory_size   = 512
