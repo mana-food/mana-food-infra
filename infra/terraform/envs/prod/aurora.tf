@@ -9,27 +9,26 @@ module "aurora" {
   master_username = var.db_master_username
   master_password = var.db_master_password
 
+  # CORRIGIDO: Usar serverless v2 
   engine_mode = "provisioned"
   serverlessv2_scaling_configuration = {
     min_capacity = 0.5
     max_capacity = 2.0
   }
 
+  instances = {
+    main = {
+      instance_class = "db.serverless"
+    }
+  }
+
   vpc_id                 = module.vpc.vpc_id
   subnets                = module.vpc.private_subnets
   vpc_security_group_ids = [aws_security_group.aurora.id]
 
+  skip_final_snapshot = true
+
   tags = {
     Name = "${var.project_name}-aurora"
-  }
-}
-
-resource "aws_security_group" "aurora" {
-  name_prefix = "${var.project_name}-aurora-sg-"
-  description = "Security group for Aurora cluster"
-  vpc_id      = module.vpc.vpc_id
-
-  tags = {
-    Name = "${var.project_name}-aurora-sg"
   }
 }

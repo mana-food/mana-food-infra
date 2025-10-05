@@ -1,22 +1,42 @@
 module "vpc" {
   source  = "terraform-aws-modules/vpc/aws"
-  version = "5.0.0"
+  version = "~> 5.0"
 
   name = "${var.project_name}-vpc"
   cidr = "10.0.0.0/16"
 
-  # Subnets Públicas (para Load Balancers, NAT Gateway)
-  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
-  public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
-  # Subnets Privadas (para EKS Worker Nodes, Aurora)
-  private_subnets = ["10.0.10.0/24", "10.0.11.0/24"]
+  azs = data.aws_availability_zones.available.names
 
-  enable_nat_gateway     = true
-  single_nat_gateway     = true # Para simplicidade, use apenas um NAT Gateway
-  enable_dns_hostnames   = true
-  enable_dns_support     = true
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  public_subnets  = ["10.0.101.0/24", "10.0.102.0/24", "10.0.103.0/24"]
+
+  enable_dns_hostnames = true
+  enable_dns_support   = true
+
+  enable_nat_gateway = true
+  enable_vpn_gateway = false
+  single_nat_gateway = true  
+
+  public_subnet_tags = {
+    "kubernetes.io/role/elb" = "1"
+    "kubernetes.io/cluster/${var.eks_cluster_name}" = "shared"
+  }
+
+  private_subnet_tags = {
+    "kubernetes.io/role/internal-elb" = "1"
+    "kubernetes.io/cluster/${var.eks_cluster_name}" = "shared"
+  }
 
   tags = {
-    Name = "${var.project_name}-vpc"
+    Environment = "prod"
+    Project     = var.project_name
+  }
+}
+
+data "aws_availability_zones" "available" {
+  state = "available"
+  filter {
+    name   = "region-name"
+    values = [var.aws_region]
   }
 }

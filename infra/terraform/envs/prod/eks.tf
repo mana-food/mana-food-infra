@@ -1,38 +1,59 @@
 module "eks" {
   source  = "terraform-aws-modules/eks/aws"
-  version = "20.1.0"
+  version = "~> 20.0"
 
-  cluster_name    = "${var.project_name}-eks"
-  cluster_version = "1.32"
+  cluster_name    = var.eks_cluster_name
+  cluster_version = "1.28"
 
   # Referencia as subnets criadas no módulo VPC
+  cluster_endpoint_public_access  = true
+  cluster_endpoint_private_access = true
+
   vpc_id                   = module.vpc.vpc_id
   subnet_ids               = module.vpc.private_subnets
-  enable_cluster_creator_admin_permissions = true
+  control_plane_subnet_ids = module.vpc.private_subnets
 
   eks_managed_node_groups = {
-    default = {
-      min_size     = 1
-      max_size     = 3
-      desired_size = 2
-      instance_types = ["t3.medium"] # Tipo de instância para os nós
-      subnet_ids     = module.vpc.private_subnets
+    main = {
+      instance_types = ["t3.medium"]
+      min_size       = 1
+      max_size       = 3
+      desired_size   = 2
+
+      ami_type       = "AL2_x86_64"
+      capacity_type  = "ON_DEMAND"
+
+      subnet_ids = module.vpc.private_subnets
+
+      labels = {
+        Environment = "prod"
+        Project     = var.project_name
+      }
+
+      update_config = {
+        max_unavailable_percentage = 25
+      }
     }
   }
 
-  tags = {
-    Name = "${var.project_name}-eks"
+  cluster_addons = {
+    coredns = {
+      most_recent = true
+    }
+    kube-proxy = {
+      most_recent = true
+    }
+    vpc-cni = {
+      most_recent = true
+    }
+    aws-ebs-csi-driver = {
+      most_recent = true
+    }
   }
-}
 
-# Security Group para permitir que os nós EKS acessem o Aurora
-resource "aws_security_group_rule" "eks_to_aurora_access" {
-  type                     = "ingress"
-  from_port                = 3306
-  to_port                  = 3306
-  protocol                 = "tcp"
-
-  source_security_group_id = module.eks.cluster_security_group_id
-  security_group_id        = aws_security_group.aurora.id
-  description              = "Allow EKS cluster to connect to Aurora"
+  enable_cluster_creator_admin_permissions = true
+  tags = {
+    Environment = "prod"
+    Project     = var.project_name
+  }
 }
