@@ -1,27 +1,35 @@
 module "aurora" {
-  source = "../../modules/aurora"
+  source  = "terraform-aws-modules/rds-aurora/aws"
+  version = "9.2.0"
 
-  cluster_identifier = "${local.name_prefix}-aurora"
-  engine             = "aurora-postgresql"
-  engine_version     = var.aurora_engine_version
+  name            = "${var.project_name}-aurora"
+  engine          = "aurora-mysql"
+  engine_version  = "8.0.mysql_aurora.3.02.0"
+  database_name   = "appdb"
+  master_username = var.db_master_username
+  master_password = var.db_master_password
 
-  database_name   = var.database_name
-  master_username = var.database_master_username
+  engine_mode = "serverless"
+  serverlessv2_scaling_configuration = {
+    min_capacity = 0.5
+    max_capacity = 2.0
+  }
 
   vpc_id                 = module.vpc.vpc_id
-  subnet_ids             = module.vpc.database_subnet_ids
+  subnets                = module.vpc.private_subnets
+  vpc_security_group_ids = [aws_security_group.aurora.id]
 
-  instance_class    = var.aurora_instance_class
-  instances_count   = var.aurora_instances_count
+  tags = {
+    Name = "${var.project_name}-aurora"
+  }
+}
 
-  backup_retention_period = var.environment == "prod" ? 7 : 1
-  preferred_backup_window = "03:00-04:00"
-  preferred_maintenance_window = "sun:04:00-sun:05:00"
+resource "aws_security_group" "aurora" {
+  name_prefix = "${var.project_name}-aurora-sg-"
+  description = "Security group for Aurora cluster"
+  vpc_id      = module.vpc.vpc_id
 
-  enabled_cloudwatch_logs_exports = ["postgresql"]
-
-  deletion_protection = var.environment == "prod" ? true : false
-  skip_final_snapshot = var.environment != "prod"
-
-  tags = local.common_tags
+  tags = {
+    Name = "${var.project_name}-aurora-sg"
+  }
 }

@@ -1,56 +1,97 @@
-module "lambda" {
-  source = "../../modules/lambda"
+# Cria o IAM Role para a Lambda
+resource "aws_iam_role" "lambda_exec" {
+  name = "${var.project_name}-lambda-role"
 
-  function_name = "${local.name_prefix}-processor"
-  handler       = "ManaFood.Lambda::ManaFood.Lambda.Function::FunctionHandler"
-  runtime       = var.lambda_runtime
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
 
-  source_path = "${path.module}/../lambda/publish"
+# Policy de acesso à VPC e Logs
+resource "aws_iam_role_policy_attachment" "lambda_vpc_access" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = var.labRole
+}
 
-  memory_size = var.lambda_memory_size
-  timeout     = var.lambda_timeout
+# Acesso ao S3 para artefatos
+data "aws_s3_bucket" "code_bucket" {
+  bucket = var.bucket_state_name
+}
 
-  environment_variables = {
-    ENVIRONMENT     = var.environment
-    DATABASE_HOST   = module.aurora.cluster_endpoint
-    DATABASE_NAME   = var.database_name
-    DATABASE_PORT   = tostring(module.aurora.port)
-    DATABASE_SECRET = module.aurora.master_password_secret_arn
-    EKS_CLUSTER     = module.eks.cluster_name
-    AWS_REGION      = var.aws_region
+# Recurso para a função Lambda .NET
+resource "aws_lambda_function" "dotnet_lambda" {
+  function_name = "${var.project_name}-api-lambda"
+  role          = aws_iam_role.lambda_exec.arn
+  handler = "My.Dotnet.Lambda::My.Dotnet.Lambda.Function::FunctionHandler" # Altere para seu handler .NET
+  runtime = "dotnet8" # Altere para sua versão
+  timeout       = 30
+  memory_size = 256
+
+  # Usar o arquivo ZIP do seu código compilado
+  s3_bucket = data.aws_s3_bucket.code_bucket.id
+  s3_key    = "dotnet_lambda.zip" # Suba seu .NET zipado para este bucket
+
+  # Coloca a Lambda na VPC (Subnets Privadas)
+  vpc_config {
+    subnet_ids = module.vpc.private_subnets
+    security_group_ids = [aws_security_group.lambda_sg.id]
   }
 
-  vpc_config = {
-    subnet_ids         = module.vpc.private_subnet_ids
-    security_group_ids = [module.vpc.lambda_security_group_id]
-  }
-
-  attach_policy_statements = true
-  policy_statements = {
-    secrets_manager = {
-      effect = "Allow"
-      actions = [
-        "secretsmanager:GetSecretValue",
-        "secretsmanager:DescribeSecret"
-      ]
-      resources = [module.aurora.master_password_secret_arn]
-    }
-    rds = {
-      effect = "Allow"
-      actions = [
-        "rds:DescribeDBClusters",
-        "rds:DescribeDBInstances"
-      ]
-      resources = [module.aurora.cluster_arn]
-    }
-    eks = {
-      effect = "Allow"
-      actions = [
-        "eks:DescribeCluster"
-      ]
-      resources = [module.eks.cluster_arn]
+  environment {
+    variables = {
+      AURORA_ENDPOINT = module.aurora.cluster_endpoint
+      # Adicione outras variáveis, como credenciais do DB (de preferência via Secrets Manager)
     }
   }
+}
 
-  tags = local.common_tags
+resource "aws_security_group_rule" "lambda_to_aurora_access" {
+  type                     = "ingress"
+  from_port                = 3306
+  to_port                  = 3306
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.lambda_sg.id
+  security_group_id        = aws_security_group.aurora.id
+  description              = "Allow Lambda to connect to Aurora"
+}
+
+# Security Group para a Lambda (Permite saída para o Aurora)
+resource "aws_security_group" "lambda_sg" {
+  name   = "${var.project_name}-lambda-sg"
+  vpc_id = module.vpc.vpc_id
+
+  tags = {
+    Name = "${var.project_name}-lambda-sg"
+  }
+}
+
+# Regra de saída da Lambda -> Aurora
+resource "aws_security_group_rule" "lambda_egress_to_aurora" {
+  type                     = "egress"
+  from_port                = 3306
+  to_port                  = 3306
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.lambda_sg.id
+  security_group_id        = aws_security_group.aurora.id
+  description              = "Allow Lambda to connect to Aurora"
+}
+
+# Regra de entrada (no Aurora) permitindo conexão da Lambda
+resource "aws_security_group_rule" "aurora_ingress_from_lambda" {
+  type                     = "ingress"
+  from_port                = 3306
+  to_port                  = 3306
+  protocol                 = "tcp"
+  source_security_group_id = aws_security_group.lambda_sg.id
+  security_group_id        = aws_security_group.aurora.id
+  description              = "Allow Lambda to connect to Aurora"
 }

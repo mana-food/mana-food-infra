@@ -1,17 +1,22 @@
 module "vpc" {
-  source = "../../modules/vpc"
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.0.0"
 
-  name_prefix         = local.name_prefix
-  vpc_cidr            = var.vpc_cidr
-  availability_zones  = local.azs
-  public_subnets      = local.public_subnets
-  private_subnets     = local.private_subnets
-  database_subnets    = local.database_subnets
+  name = "${var.project_name}-vpc"
+  cidr = "10.0.0.0/16"
 
-  enable_nat_gateway   = true
-  single_nat_gateway   = var.environment == "dev" ? true : false
-  enable_dns_hostnames = true
-  enable_dns_support   = true
+  # Subnets Públicas (para Load Balancers, NAT Gateway)
+  azs             = ["${var.aws_region}a", "${var.aws_region}b"]
+  public_subnets  = ["10.0.1.0/24", "10.0.2.0/24"]
+  # Subnets Privadas (para EKS Worker Nodes, Aurora)
+  private_subnets = ["10.0.10.0/24", "10.0.11.0/24"]
 
-  tags = local.common_tags
+  enable_nat_gateway     = true
+  single_nat_gateway     = true # Para simplicidade, use apenas um NAT Gateway
+  enable_dns_hostnames   = true
+  enable_dns_support     = true
+
+  tags = {
+    Name = "${var.project_name}-vpc"
+  }
 }

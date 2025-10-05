@@ -1,0 +1,6 @@
+.idea
+./infra/terraform/*.tfstate
+./infra/terraform/envs/prod/.terraform
+./infra/terraform/envs/prod/.terraform.lock.hcl
+./infra/terraform/envs/prod/secrets.tfvars
+./infra/terraform/envs/prod/secrets.auto.tfvars
