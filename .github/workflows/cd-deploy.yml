@@ -163,6 +163,10 @@ jobs:
             -var-file="environments/prod.tfvars" \
             -out=tfplan-prod \
             -no-color
+        env:
+          db_master_username: ${{ secrets.db_master_username }}
+          db_master_password: ${{ secrets.TF_VAR_db_password }}
+          bucket_state_name: ${{ secrets.bucket_state_name }}
 
       - name: Salvar plano
         uses: actions/upload-artifact@v4
@@ -215,6 +219,10 @@ jobs:
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan-prod
+        env:
+          db_master_username: ${{ secrets.db_master_username }}
+          db_master_password: ${{ secrets.TF_VAR_db_password }}
+          bucket_state_name: ${{ secrets.bucket_state_name }}
 
       - name: Terraform Output
         id: output
