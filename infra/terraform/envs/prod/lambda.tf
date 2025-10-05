@@ -47,15 +47,19 @@ resource "aws_lambda_function" "dotnet_lambda" {
     }
   }
 }
-
 resource "aws_security_group_rule" "lambda_to_aurora_access" {
   type                     = "ingress"
   from_port                = 3306
   to_port                  = 3306
   protocol                 = "tcp"
-  source_security_group_id = aws_security_group.lambda_sg.id
   security_group_id        = aws_security_group.aurora.id
-  description              = "Allow Lambda to connect to Aurora"
+  source_security_group_id = aws_security_group.lambda_sg.id
+  description              = "Allow Lambda to access Aurora"
+
+  lifecycle {
+    create_before_destroy = true
+    ignore_changes        = [description]
+  }
 }
 
 # Security Group para a Lambda (Permite saída para o Aurora)

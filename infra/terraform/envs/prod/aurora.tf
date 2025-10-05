@@ -9,7 +9,7 @@ module "aurora" {
   master_username = var.db_master_username
   master_password = var.db_master_password
 
-  engine_mode = "serverless"
+  engine_mode = "provisioned"
   serverlessv2_scaling_configuration = {
     min_capacity = 0.5
     max_capacity = 2.0
