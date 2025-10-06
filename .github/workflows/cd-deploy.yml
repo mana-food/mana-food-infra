@@ -169,7 +169,6 @@ jobs:
           name: tfplan-prod
           path: infra/terraform/envs/prod
 
-      # CORRIGIDO: Import recursos existentes ANTES da limpeza
       - name: Import recursos existentes
         continue-on-error: true
         run: |
@@ -205,7 +204,6 @@ jobs:
             echo "✅ CloudWatch Log Group já está no state"
           fi
 
-      # CORRIGIDO: Limpeza mais específica
       - name: Limpar recursos órfãos do state
         continue-on-error: true
         run: |
@@ -235,20 +233,25 @@ jobs:
             fi
           done
 
-      # CORRIGIDO: Recriar plan com replace específico
-      - name: Recriar Terraform Plan (pós-import)
+      - name: Terraform Plan Completo
         run: |
-          echo "📋 Criando plano de execução..."
+          echo "📋 Criando plano COMPLETO de execução..."
           terraform plan \
             -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
-            -out=tfplan-prod \
-            -no-color \
-            -target=aws_db_subnet_group.aurora \
-            -target=module.aurora.aws_rds_cluster.this[0] \
-            -replace="module.aurora.aws_rds_cluster.this[0]"
+            -out=tfplan-prod-complete \
+            -no-color
 
-      - name: Terraform Apply
-        run: terraform apply -auto-approve tfplan-prod
+      - name: Terraform Apply Completo
+        run: |
+          echo "🚀 Aplicando configuração COMPLETA..."
+          terraform apply -auto-approve tfplan-prod-complete
+
+      - name: Verificar recursos criados
+        run: |
+          echo "🔍 Verificando recursos pendentes..."
+          terraform plan \
+            -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            -detailed-exitcode || echo "⚠️ Alguns recursos ainda estão pendentes"
 
       - name: Terraform Output
         id: output
@@ -293,16 +296,71 @@ jobs:
 
       - name: Obter kubeconfig do EKS
         run: |
+          echo "🔑 Configurando acesso ao cluster EKS..."
           aws eks update-kubeconfig \
             --region ${{ secrets.AWS_REGION }} \
             --name mana-food-eks
+
+      - name: Aguardar cluster EKS ficar acessível
+        run: |
+          echo "⏳ Aguardando cluster EKS ficar acessível..."
+          timeout 300 bash -c '
+            while ! kubectl cluster-info --request-timeout=10s > /dev/null 2>&1; do
+              echo "⏳ Aguardando cluster... $(date)"
+              sleep 15
+            done
+            echo "✅ Cluster acessível!"
+          ' || echo "⚠️ Timeout na conectividade - continuando mesmo assim"
 
       - name: Verificar se deployment existe
         id: check_deployment
         continue-on-error: true
         run: |
           kubectl get deployment ${{ github.event.inputs.deployment || 'mana-food-app' }} \
-            -n ${{ github.event.inputs.namespace || 'default' }}
+            -n ${{ github.event.inputs.namespace || 'default' }} \
+            --request-timeout=30s
+
+      - name: Criar deployment se não existir
+        if: steps.check_deployment.outcome == 'failure'
+        run: |
+          echo "🚀 Deployment não encontrado. Criando deployment e service..."
+          kubectl apply -f - <<EOF
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: mana-food-app
+            namespace: default
+            labels:
+              app: mana-food-app
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: mana-food-app
+            template:
+              metadata:
+                labels:
+                  app: mana-food-app
+              spec:
+                containers:
+                - name: app-container
+                  image: ${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }}
+                  ports:
+                  - containerPort: 8080
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mana-food-service
+            namespace: default
+          spec:
+            selector:
+              app: mana-food-app
+            ports:
+            - port: 80
+              targetPort: 8080
+            type: LoadBalancer
+          EOF
 
       - name: Atualizar imagem do deployment
         if: steps.check_deployment.outcome == 'success'
@@ -312,7 +370,6 @@ jobs:
             -n ${{ github.event.inputs.namespace || 'default' }}
 
       - name: Verificar rollout
-        if: steps.check_deployment.outcome == 'success'
         run: |
           kubectl rollout status deployment/${{ github.event.inputs.deployment || 'mana-food-app' }} \
             -n ${{ github.event.inputs.namespace || 'default' }} \
@@ -322,6 +379,7 @@ jobs:
         if: always()
         run: |
           kubectl get pods -n ${{ github.event.inputs.namespace || 'default' }} -l app=mana-food-app
+          kubectl get svc -n ${{ github.event.inputs.namespace || 'default' }}
 
       - name: Notificar deploy
         if: success()

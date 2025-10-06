@@ -1,3 +1,4 @@
+# DB Subnet Group para Aurora
 resource "aws_db_subnet_group" "aurora" {
   name       = "${var.project_name}-aurora"
   subnet_ids = module.vpc.private_subnets
@@ -17,9 +18,10 @@ module "aurora" {
   engine          = "aurora-mysql"
   engine_version  = "8.0.mysql_aurora.3.10.1"
   database_name   = "appdb"
+  
   master_username               = "admin"
-  manage_master_user_password   = true 
-
+  manage_master_user_password   = true
+  
   engine_mode = "provisioned"
   serverlessv2_scaling_configuration = {
     min_capacity = 0.5
@@ -33,7 +35,7 @@ module "aurora" {
   }
 
   vpc_id                 = module.vpc.vpc_id
-  db_subnet_group_name   = aws_db_subnet_group.aurora.name 
+  db_subnet_group_name   = aws_db_subnet_group.aurora.name
   vpc_security_group_ids = [aws_security_group.aurora.id]
 
   skip_final_snapshot = true
@@ -53,7 +55,9 @@ resource "aws_security_group" "aurora" {
   vpc_id      = module.vpc.vpc_id
 
   tags = {
-    Name = "${var.project_name}-aurora-sg"
+    Name        = "${var.project_name}-aurora-sg"
+    Environment = "prod"
+    Project     = var.project_name
   }
 }
 
@@ -65,4 +69,14 @@ resource "aws_security_group_rule" "aurora_from_lambda" {
   source_security_group_id = aws_security_group.lambda_sg.id
   security_group_id        = aws_security_group.aurora.id
   description              = "MySQL/Aurora access from Lambda"
+}
+
+resource "aws_security_group_rule" "eks_to_aurora_access" {
+  type                     = "ingress"
+  from_port                = 3306
+  to_port                  = 3306
+  protocol                 = "tcp"
+  source_security_group_id = module.eks.node_security_group_id
+  security_group_id        = aws_security_group.aurora.id
+  description              = "MySQL/Aurora access from EKS nodes"
 }
