@@ -1,10 +1,10 @@
 # DB Subnet Group para Aurora
 resource "aws_db_subnet_group" "aurora" {
-  name       = "${var.project_name}-aurora"
+  name       = "${var.project_name}-aurora-2"
   subnet_ids = module.vpc.private_subnets
 
   tags = {
-    Name        = "${var.project_name}-aurora"
+    Name        = "${var.project_name}-aurora-2"
     Environment = "prod"
     Project     = var.project_name
   }
@@ -14,7 +14,7 @@ module "aurora" {
   source  = "terraform-aws-modules/rds-aurora/aws"
   version = "9.2.0"
 
-  name            = "${var.project_name}-aurora"
+  name            = "${var.project_name}-aurora-2"
   engine          = "aurora-mysql"
   engine_version  = "8.0.mysql_aurora.3.10.1"
   database_name   = "appdb"
@@ -41,7 +41,7 @@ module "aurora" {
   skip_final_snapshot = true
 
   tags = {
-    Name        = "${var.project_name}-aurora"
+    Name        = "${var.project_name}-aurora-2"
     Environment = "prod"
     Project     = var.project_name
   }
@@ -50,12 +50,12 @@ module "aurora" {
 }
 
 resource "aws_security_group" "aurora" {
-  name_prefix = "${var.project_name}-aurora-sg-"
+  name_prefix = "${var.project_name}-aurora-sg-2"
   description = "Security group for Aurora cluster"
   vpc_id      = module.vpc.vpc_id
 
   tags = {
-    Name        = "${var.project_name}-aurora-sg"
+    Name        = "${var.project_name}-aurora-sg-2"
     Environment = "prod"
     Project     = var.project_name
   }
