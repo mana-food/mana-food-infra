@@ -43,7 +43,7 @@ variable "bucket_state_name" {
 variable "create_k8s_resources" {
   description = "Se true, cria recursos Kubernetes (ConfigMap, Secret, Deployment, Service, HPA). False para criar apenas infraestrutura"
   type        = bool
-  default     = true  # CORRIGIDO: true por padrão para deploy completo
+  default     = false # Alterado para false para evitar criar recursos K8s no mesmo apply da infra
 }
 
 # ==========================================

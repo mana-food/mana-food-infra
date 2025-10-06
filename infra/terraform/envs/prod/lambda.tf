@@ -51,14 +51,6 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
 }
 
 # ==========================================
-# S3 BUCKET PARA CÓDIGO
-# ==========================================
-
-data "aws_s3_bucket" "code_bucket" {
-  bucket = var.bucket_state_name
-}
-
-# ==========================================
 # ARQUIVO ZIP TEMPORÁRIO (DUMMY)
 # ==========================================
 
@@ -99,6 +91,9 @@ resource "aws_security_group" "lambda_sg" {
   lifecycle {
     create_before_destroy = true
   }
+
+  # Ajuda a remover regras que referenciam este SG ao deletar (reduce dependency issues)
+  revoke_rules_on_delete = true
 }
 
 # ==========================================

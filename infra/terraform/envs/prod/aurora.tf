@@ -59,6 +59,9 @@ resource "aws_security_group" "aurora" {
     Environment = "prod"
     Project     = var.project_name
   }
+
+  # Ajuda a remover regras que referenciam este SG ao deletar
+  revoke_rules_on_delete = true
 }
 
 resource "aws_security_group_rule" "aurora_from_lambda" {
