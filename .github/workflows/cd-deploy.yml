@@ -166,26 +166,34 @@ jobs:
         continue-on-error: true
         run: |
           # Importar IAM User se existir
-          terraform import aws_iam_user.manafood_terraform manafood-terraform || true
+          terraform import \
+            -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            aws_iam_user.manafood_terraform manafood-terraform || true
           
-          # Importar KMS Alias se existir (nome correto)
-          terraform import 'module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mana-food-eks || true
+          # Importar KMS Alias se existir
+          terraform import \
+            -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            'module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mana-food-eks || true
           
-          # Importar CloudWatch Log Group se existir (nome correto)
-          terraform import 'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/mana-food-eks/cluster || true
+          # Importar CloudWatch Log Group se existir
+          terraform import \
+            -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/mana-food-eks/cluster || true
 
-      # CORRIGIDO: Limpeza de recursos órfãos APÓS import
+      # CORRIGIDO: Limpeza mais específica
       - name: Limpar recursos órfãos do state
         continue-on-error: true
         run: |
-          # Remover recursos órfãos (deposed objects)
-          terraform state list | grep "deposed" | head -10 | xargs -r terraform state rm || true
+          # Listar e remover apenas recursos órfãos específicos
+          terraform state list | grep -E "(deposed|orphaned)" | head -20 | while read resource; do
+            terraform state rm "$resource" || true
+          done
           
-          # Remover regras duplicadas se existirem
+          # Remover regras duplicadas específicas
           terraform state rm aws_security_group_rule.lambda_to_aurora_access || true
           terraform state rm aws_security_group_rule.lambda_egress_to_aurora || true
 
-      # CORRIGIDO: Recriar plan após import/limpeza
+      # CORRIGIDO: Recriar plan com replace específico
       - name: Recriar Terraform Plan (pós-import)
         run: |
           terraform plan \
