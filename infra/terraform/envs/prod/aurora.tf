@@ -4,7 +4,7 @@ module "aurora" {
 
   name            = "${var.project_name}-aurora"
   engine          = "aurora-mysql"
-  engine_version  = "8.0.mysql_aurora.3.05.2" 
+  engine_version  = "8.0.mysql_aurora.3.07.0"
   database_name   = "appdb"
   master_username               = "admin"
   manage_master_user_password   = true 
