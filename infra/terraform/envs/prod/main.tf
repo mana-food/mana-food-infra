@@ -18,50 +18,23 @@ terraform {
       source  = "gavinbunney/kubectl"
       version = "~> 1.14"
     }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.4"
+    }
   }
 }
 
-### Kubernetes Resources
-
-resource "kubernetes_manifest" "api_configmap" {
-  count = var.create_k8s_resources ? 1 : 0
-  depends_on = [module.eks]
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-configmap.yaml"))
+# IMPORTAR IAM User existente em vez de criar
+import {
+  to = aws_iam_user.manafood_terraform
+  id = "manafood-terraform"
 }
 
-resource "kubernetes_manifest" "api_secret" {
-  count = var.create_k8s_resources ? 1 : 0
-  depends_on = [module.eks]
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-secret.yaml"))
-}
-
-resource "kubernetes_manifest" "api_deployment" {
-  count = var.create_k8s_resources ? 1 : 0
-  depends_on = [
-    kubernetes_manifest.api_configmap[0],
-    kubernetes_manifest.api_secret[0]
-  ]
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-deployment.yaml"))
-}
-
-resource "kubernetes_manifest" "api_service" {
-  count = var.create_k8s_resources ? 1 : 0
-  depends_on = [
-    kubernetes_manifest.api_deployment[0]
-  ]
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-service.yaml"))
-}
-
-resource "kubernetes_manifest" "api_hpa" {
-  count = var.create_k8s_resources ? 1 : 0
-  depends_on = [
-    kubernetes_manifest.api_deployment[0]
-  ]
-  manifest = yamldecode(file("${path.module}/../../../k8s/api-hpa.yaml"))
-}
 resource "aws_iam_user" "manafood_terraform" {
   name = "manafood-terraform"
 }
+
 resource "aws_iam_user_policy_attachment" "administrator_access" {
   user       = aws_iam_user.manafood_terraform.name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"

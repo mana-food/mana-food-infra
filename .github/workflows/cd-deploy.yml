@@ -47,7 +47,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_SECRET_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -65,7 +65,7 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -backend-config="key=${{ github.repository }}-${{ github.ref_name }}.tfstate" \
-            -backend-config="region=${{ secrets.AWS_SECRET_REGION }}"
+            -backend-config="region=${{ secrets.AWS_REGION }}"
 
       - name: Terraform Validate
         id: validate
@@ -116,7 +116,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_SECRET_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -128,7 +128,7 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -backend-config="key=${{ github.repository }}-prod.tfstate" \
-            -backend-config="region=${{ secrets.AWS_SECRET_REGION }}"
+            -backend-config="region=${{ secrets.AWS_REGION }}"
 
       - name: Terraform Plan
         id: plan
@@ -137,7 +137,7 @@ jobs:
             -out=tfplan-prod \
             -no-color
         env:
-          TF_VAR_aws_region: ${{ secrets.AWS_SECRET_REGION }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
           TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
           TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
           TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
@@ -172,7 +172,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_SECRET_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -185,7 +185,7 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -backend-config="key=${{ github.repository }}-prod.tfstate" \
-            -backend-config="region=${{ secrets.AWS_SECRET_REGION }}"
+            -backend-config="region=${{ secrets.AWS_REGION }}"
 
       - name: Download plano
         uses: actions/download-artifact@v4
@@ -216,7 +216,7 @@ jobs:
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan-prod
         env:
-          TF_VAR_aws_region: ${{ secrets.AWS_SECRET_REGION }}
+          TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
           TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
           TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
           TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
@@ -257,7 +257,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_SECRET_REGION }}
+          aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Instalar kubectl
         uses: azure/setup-kubectl@v3
@@ -267,7 +267,7 @@ jobs:
       - name: Obter kubeconfig do EKS
         run: |
           aws eks update-kubeconfig \
-            --region ${{ secrets.AWS_SECRET_REGION }} \
+            --region ${{ secrets.AWS_REGION }} \
             --name ${{ secrets.AWS_EKS_CLUSTER_NAME }}
 
       - name: Atualizar imagem do deployment
