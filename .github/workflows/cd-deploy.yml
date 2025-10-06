@@ -11,11 +11,11 @@ on:
       deployment:
         description: "Deployment Kubernetes a atualizar"
         required: true
-        default: "mana-food"
+        default: "mana-food-app"  # CORRIGIDO: nome consistente
       container:
         description: "Container dentro do deployment a atualizar"
         required: true
-        default: "mana-food"
+        default: "app-container"  # CORRIGIDO: nome do container no kubernetes.tf
       namespace:
         description: "Namespace Kubernetes"
         required: true
@@ -23,7 +23,6 @@ on:
   push:
     branches:
       - main
-      - test/yaml
 
 permissions:
   contents: read
@@ -72,32 +71,6 @@ jobs:
         id: validate
         run: terraform validate -no-color
 
-      - name: Comentar resultado no PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
-            #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
-            #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
-            
-            <details><summary>Validation Output</summary>
-            
-            \`\`\`
-            ${{ steps.validate.outputs.stdout }}
-            \`\`\`
-            
-            </details>
-            
-            *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
-            
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: output
-            })
-
   terraform-plan-prod:
     name: 'Plan Production'
     runs-on: ubuntu-latest
@@ -131,19 +104,14 @@ jobs:
             -backend-config="key=${{ github.repository }}-prod.tfstate" \
             -backend-config="region=${{ secrets.AWS_REGION }}"
 
+      # CORRIGIDO: Remover variáveis que não existem mais
       - name: Terraform Plan
         id: plan
         run: |
           terraform plan \
+            -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -out=tfplan-prod \
             -no-color
-        env:
-          TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
-          TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
-          TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
-          TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
-          TF_VAR_project_name: "mana-food"
-          TF_VAR_eks_cluster_name: "mana-food-eks"
 
       - name: Salvar plano
         uses: actions/upload-artifact@v4
@@ -194,35 +162,27 @@ jobs:
           name: tfplan-prod
           path: infra/terraform/envs/prod
 
-      - name: Import existing resources
+      # CORRIGIDO: Limpeza de recursos órfãos ANTES do apply
+      - name: Limpar recursos órfãos do state
         continue-on-error: true
         run: |
-          # Importar IAM User se existir
-          terraform import aws_iam_user.manafood_terraform manafood-terraform || true
+          # Remover recursos órfãos (deposed objects)
+          terraform state list | grep "deposed" | xargs -r terraform state rm || true
           
-          # Importar KMS Alias se existir
-          terraform import 'module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/manafood-eks || true
-          
-          # Importar CloudWatch Log Group se existir
-          terraform import 'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/manafood-eks/cluster || true
-      
-      - name: Clean existing conflicts
-        continue-on-error: true
+          # Remover regras duplicadas se existirem
+          terraform state rm aws_security_group_rule.lambda_to_aurora_access || true
+          terraform state rm aws_security_group_rule.lambda_egress_to_aurora || true
+
+      # CORRIGIDO: Recriar plan após limpeza do state
+      - name: Recriar Terraform Plan
         run: |
-          # Remover recursos duplicados do state
-          terraform state rm aws_iam_user.manafood_terraform || true
-          terraform state rm 'module.eks.module.kms.aws_kms_alias.this["cluster"]' || true
-          terraform state rm 'module.eks.aws_cloudwatch_log_group.this[0]' || true
+          terraform plan \
+            -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            -out=tfplan-prod \
+            -no-color
 
       - name: Terraform Apply
         run: terraform apply -auto-approve tfplan-prod
-        env:
-          TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
-          TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
-          TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
-          TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
-          TF_VAR_project_name: "mana-food"
-          TF_VAR_eks_cluster_name: "mana-food-eks"
 
       - name: Terraform Output
         id: output
@@ -232,7 +192,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: terraform-outputs-prod
-          path: ./terraform/outputs.json
+          path: infra/terraform/envs/prod/outputs.json  # CORRIGIDO: path correto
           retention-days: 90
 
       - name: Notificar sucesso
@@ -269,18 +229,33 @@ jobs:
         run: |
           aws eks update-kubeconfig \
             --region ${{ secrets.AWS_REGION }} \
-            --name ${{ secrets.AWS_EKS_CLUSTER_NAME }}
+            --name mana-food-eks  # CORRIGIDO: nome fixo do cluster
+
+      - name: Verificar se deployment existe
+        id: check_deployment
+        continue-on-error: true
+        run: |
+          kubectl get deployment ${{ github.event.inputs.deployment || 'mana-food-app' }} \
+            -n ${{ github.event.inputs.namespace || 'default' }}
 
       - name: Atualizar imagem do deployment
+        if: steps.check_deployment.outcome == 'success'
         run: |
-          kubectl set image deployment/${{ github.event.inputs.deployment || 'mana-food' }} \
-            ${{ github.event.inputs.container || 'mana-food' }}=${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }} \
+          kubectl set image deployment/${{ github.event.inputs.deployment || 'mana-food-app' }} \
+            ${{ github.event.inputs.container || 'app-container' }}=${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }} \
             -n ${{ github.event.inputs.namespace || 'default' }}
 
       - name: Verificar rollout
+        if: steps.check_deployment.outcome == 'success'
         run: |
-          kubectl rollout status deployment/${{ github.event.inputs.deployment || 'mana-food' }} \
-            -n ${{ github.event.inputs.namespace || 'default' }}
+          kubectl rollout status deployment/${{ github.event.inputs.deployment || 'mana-food-app' }} \
+            -n ${{ github.event.inputs.namespace || 'default' }} \
+            --timeout=300s
+
+      - name: Mostrar status dos pods
+        if: always()
+        run: |
+          kubectl get pods -n ${{ github.event.inputs.namespace || 'default' }} -l App=mana-food-app
 
       - name: Notificar deploy
         if: success()
@@ -288,4 +263,298 @@ jobs:
           echo "🚀 Deploy da aplicação realizado com sucesso no cluster EKS!"
           echo "Imagem: ${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }}"
           echo "Namespace: ${{ github.event.inputs.namespace || 'default' }}"
-          echo "Deployment: ${{ github.event.inputs.deployment || 'mana-food' }}"
+          echo "Deployment: ${{ github.event.inputs.deployment || 'mana-food-app' }}"
+
+
+
+# name: Deploy na AWS
+
+# on:
+#   workflow_dispatch:
+#     inputs:
+#       image:
+#         description: "Imagem da aplicação para deploy"
+#         required: true
+#         type: string
+#         default: ghcr.io/mana-food-clean-architecture:latest
+#       deployment:
+#         description: "Deployment Kubernetes a atualizar"
+#         required: true
+#         default: "mana-food"
+#       container:
+#         description: "Container dentro do deployment a atualizar"
+#         required: true
+#         default: "mana-food"
+#       namespace:
+#         description: "Namespace Kubernetes"
+#         required: true
+#         default: "default"
+#   push:
+#     branches:
+#       - main
+#       - test/yaml
+
+# permissions:
+#   contents: read
+#   pull-requests: write
+#   id-token: write
+
+# jobs:
+
+#   terraform-validate:
+#     name: 'Terraform Validate'
+#     runs-on: ubuntu-latest
+#     defaults:
+#       run:
+#         working-directory: infra/terraform/envs/prod
+
+#     steps:
+#       - name: Checkout código
+#         uses: actions/checkout@v4
+
+#       - name: Configure AWS Credentials
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ secrets.AWS_REGION }}
+
+#       - name: Setup Terraform
+#         uses: hashicorp/setup-terraform@v3
+#         with:
+#           terraform_version: '1.6.0'
+
+#       - name: Terraform Format Check
+#         id: fmt
+#         run: terraform fmt -check -recursive
+#         continue-on-error: true
+
+#       - name: Terraform Init
+#         id: init
+#         run: |
+#           terraform init \
+#             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+#             -backend-config="key=${{ github.repository }}-${{ github.ref_name }}.tfstate" \
+#             -backend-config="region=${{ secrets.AWS_REGION }}"
+
+#       - name: Terraform Validate
+#         id: validate
+#         run: terraform validate -no-color
+
+#       - name: Comentar resultado no PR
+#         if: github.event_name == 'pull_request'
+#         uses: actions/github-script@v7
+#         with:
+#           script: |
+#             const output = `#### Terraform Format and Style 🖌\`${{ steps.fmt.outcome }}\`
+#             #### Terraform Initialization ⚙️\`${{ steps.init.outcome }}\`
+#             #### Terraform Validation 🤖\`${{ steps.validate.outcome }}\`
+            
+#             <details><summary>Validation Output</summary>
+            
+#             \`\`\`
+#             ${{ steps.validate.outputs.stdout }}
+#             \`\`\`
+            
+#             </details>
+            
+#             *Pusher: @${{ github.actor }}, Action: \`${{ github.event_name }}\`*`;
+            
+#             github.rest.issues.createComment({
+#               issue_number: context.issue.number,
+#               owner: context.repo.owner,
+#               repo: context.repo.repo,
+#               body: output
+#             })
+
+#   terraform-plan-prod:
+#     name: 'Plan Production'
+#     runs-on: ubuntu-latest
+#     needs: terraform-validate
+#     if: github.ref == 'refs/heads/main'
+#     environment: production
+#     defaults:
+#       run:
+#         working-directory: infra/terraform/envs/prod
+
+#     steps:
+#       - name: Checkout código
+#         uses: actions/checkout@v4
+
+#       - name: Configure AWS Credentials
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ secrets.AWS_REGION }}
+
+#       - name: Setup Terraform
+#         uses: hashicorp/setup-terraform@v3
+#         with:
+#           terraform_version: '1.6.0'
+
+#       - name: Terraform Init
+#         run: |
+#           terraform init \
+#             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+#             -backend-config="key=${{ github.repository }}-prod.tfstate" \
+#             -backend-config="region=${{ secrets.AWS_REGION }}"
+
+#       - name: Terraform Plan
+#         id: plan
+#         run: |
+#           terraform plan \
+#             -out=tfplan-prod \
+#             -no-color
+#         env:
+#           TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
+#           TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
+#           TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
+#           TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
+#           TF_VAR_project_name: "mana-food"
+#           TF_VAR_eks_cluster_name: "mana-food-eks"
+
+#       - name: Salvar plano
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: tfplan-prod
+#           path: infra/terraform/envs/prod/tfplan-prod
+#           retention-days: 30
+
+#   terraform-apply-prod:
+#     name: 'Apply Production'
+#     runs-on: ubuntu-latest
+#     needs: terraform-plan-prod
+#     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+#     environment:
+#       name: production
+#       url: https://example.com
+#     defaults:
+#       run:
+#         working-directory: infra/terraform/envs/prod
+
+#     steps:
+#       - name: Checkout código
+#         uses: actions/checkout@v4
+
+#       - name: Configure AWS Credentials
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ secrets.AWS_REGION }}
+
+#       - name: Setup Terraform
+#         uses: hashicorp/setup-terraform@v3
+#         with:
+#           terraform_version: '1.6.0'
+#           terraform_wrapper: false
+
+#       - name: Terraform Init
+#         run: |
+#           terraform init \
+#             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+#             -backend-config="key=${{ github.repository }}-prod.tfstate" \
+#             -backend-config="region=${{ secrets.AWS_REGION }}"
+
+#       - name: Download plano
+#         uses: actions/download-artifact@v4
+#         with:
+#           name: tfplan-prod
+#           path: infra/terraform/envs/prod
+
+#       - name: Import existing resources
+#         continue-on-error: true
+#         run: |
+#           # Importar IAM User se existir
+#           terraform import aws_iam_user.manafood_terraform manafood-terraform || true
+          
+#           # Importar KMS Alias se existir
+#           terraform import 'module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/manafood-eks || true
+          
+#           # Importar CloudWatch Log Group se existir
+#           terraform import 'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/manafood-eks/cluster || true
+      
+#       - name: Clean existing conflicts
+#         continue-on-error: true
+#         run: |
+#           # Remover recursos duplicados do state
+#           terraform state rm aws_iam_user.manafood_terraform || true
+#           terraform state rm 'module.eks.module.kms.aws_kms_alias.this["cluster"]' || true
+#           terraform state rm 'module.eks.aws_cloudwatch_log_group.this[0]' || true
+
+#       - name: Terraform Apply
+#         run: terraform apply -auto-approve tfplan-prod
+#         env:
+#           TF_VAR_aws_region: ${{ secrets.AWS_REGION }}
+#           TF_VAR_db_master_username: ${{ secrets.DB_MASTER_USERNAME }}
+#           TF_VAR_db_master_password: ${{ secrets.DB_MASTER_PASSWORD }}
+#           TF_VAR_bucket_state_name: ${{ secrets.BUCKET_STATE_NAME }}
+#           TF_VAR_project_name: "mana-food"
+#           TF_VAR_eks_cluster_name: "mana-food-eks"
+
+#       - name: Terraform Output
+#         id: output
+#         run: terraform output -json > outputs.json
+
+#       - name: Upload outputs
+#         uses: actions/upload-artifact@v4
+#         with:
+#           name: terraform-outputs-prod
+#           path: ./terraform/outputs.json
+#           retention-days: 90
+
+#       - name: Notificar sucesso
+#         if: success()
+#         run: |
+#           echo "✅ Deploy em produção realizado com sucesso!"
+#           echo "Commit: ${{ github.sha }}"
+#           echo "Autor: ${{ github.actor }}"
+
+#   deploy-app:
+#     name: 'Deploy Aplicação no EKS'
+#     runs-on: ubuntu-latest
+#     needs: terraform-apply-prod
+#     if: github.ref == 'refs/heads/main' && github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+#     environment:
+#       name: production
+#     steps:
+#       - name: Checkout código
+#         uses: actions/checkout@v4
+
+#       - name: Configurar credenciais AWS
+#         uses: aws-actions/configure-aws-credentials@v4
+#         with:
+#           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+#           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+#           aws-region: ${{ secrets.AWS_REGION }}
+
+#       - name: Instalar kubectl
+#         uses: azure/setup-kubectl@v3
+#         with:
+#           version: 'latest'
+
+#       - name: Obter kubeconfig do EKS
+#         run: |
+#           aws eks update-kubeconfig \
+#             --region ${{ secrets.AWS_REGION }} \
+#             --name ${{ secrets.AWS_EKS_CLUSTER_NAME }}
+
+#       - name: Atualizar imagem do deployment
+#         run: |
+#           kubectl set image deployment/${{ github.event.inputs.deployment || 'mana-food' }} \
+#             ${{ github.event.inputs.container || 'mana-food' }}=${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }} \
+#             -n ${{ github.event.inputs.namespace || 'default' }}
+
+#       - name: Verificar rollout
+#         run: |
+#           kubectl rollout status deployment/${{ github.event.inputs.deployment || 'mana-food' }} \
+#             -n ${{ github.event.inputs.namespace || 'default' }}
+
+#       - name: Notificar deploy
+#         if: success()
+#         run: |
+#           echo "🚀 Deploy da aplicação realizado com sucesso no cluster EKS!"
+#           echo "Imagem: ${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }}"
+#           echo "Namespace: ${{ github.event.inputs.namespace || 'default' }}"
+#           echo "Deployment: ${{ github.event.inputs.deployment || 'mana-food' }}"

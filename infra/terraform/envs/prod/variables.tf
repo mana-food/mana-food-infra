@@ -1,85 +1,100 @@
+# ==========================================
+# CONFIGURAÇÕES BÁSICAS
+# ==========================================
+
 variable "aws_region" {
-  description = "Região da AWS para deploy."
+  description = "Região da AWS para deploy"
   type        = string
   default     = "us-east-1"
 }
 
 variable "project_name" {
-  description = "Nome do projeto."
+  description = "Nome do projeto"
   type        = string
-  default     = "manafood"
+  default     = "mana-food"  
 }
+
+variable "availability_zones" {
+  description = "Zonas de disponibilidade"
+  type        = list(string)
+  default     = ["us-east-1a", "us-east-1b"]
+}
+
+# ==========================================
+# CONFIGURAÇÕES DE INFRAESTRUTURA
+# ==========================================
 
 variable "eks_cluster_name" {
-  description = "Nome base para o recurso eks cluster"
+  description = "Nome base para o cluster EKS"
   type        = string
-  default     = "manafood-eks"
-}
-
-
-variable "db_master_username" {
-  description = "Nome de usuário mestre do Aurora."
-  type        = string
-  sensitive   = true
-}
-
-variable "db_master_password" {
-  description = "Senha mestre do Aurora."
-  type        = string
-  sensitive   = true
+  default     = "mana-food-eks"  # CORRIGIDO: consistência com project_name
 }
 
 variable "bucket_state_name" {
-  description = "Nome do bucket S3 para o estado remoto do Terraform."
+  description = "Nome do bucket S3 para o estado remoto do Terraform"
   type        = string
   sensitive   = true
 }
 
+# ==========================================
+# CONFIGURAÇÕES DE RECURSOS KUBERNETES
+# ==========================================
+
+variable "create_k8s_resources" {
+  description = "Se true, cria recursos Kubernetes (ConfigMap, Secret, Deployment, Service, HPA). False para criar apenas infraestrutura"
+  type        = bool
+  default     = true  # CORRIGIDO: true por padrão para deploy completo
+}
+
+# ==========================================
+# POLÍTICAS IAM (TODAS COM DEFAULT)
+# ==========================================
 
 variable "policy_eks_cluster" {
+  description = "ARN da política para cluster EKS"
   type        = string
-  sensitive   = true
   default     = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
+  sensitive   = false  # CORRIGIDO: ARNs públicos não precisam ser sensitive
 }
 
 variable "policy_eks_service" {
+  description = "ARN da política para serviços EKS"
   type        = string
-  sensitive   = true
   default     = "arn:aws:iam::aws:policy/AmazonEKSServicePolicy"
+  sensitive   = false
 }
 
 variable "policy_eks_worker" {
+  description = "ARN da política para worker nodes EKS"
   type        = string
-  sensitive   = true
   default     = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+  sensitive   = false
 }
 
 variable "policy_vpc" {
+  description = "ARN da política para VPC"
   type        = string
-  sensitive   = true
   default     = "arn:aws:iam::aws:policy/AmazonVPCFullAccess"
+  sensitive   = false
 }
 
 variable "policy_rds" {
+  description = "ARN da política para RDS"
   type        = string
-  sensitive   = true
   default     = "arn:aws:iam::aws:policy/AmazonRDSFullAccess"
+  sensitive   = false
 }
 
 variable "policy_lambda" {
+  description = "ARN da política para Lambda"
   type        = string
-  sensitive   = true
   default     = "arn:aws:iam::aws:policy/AWSLambda_FullAccess"
+  sensitive   = false
 }
 
 variable "policy_iam_readonly" {
+  description = "ARN da política IAM ReadOnly"
   type        = string
-  sensitive   = true
   default     = "arn:aws:iam::aws:policy/IAMReadOnlyAccess"
-}
-
-variable "create_k8s_resources" {
-  description = "If true, create Kubernetes resources (ConfigMap, Secret, Deployment, Service, HPA). Toggle to false to create infra only."
-  type        = bool
-  default     = false
+  sensitive   = false
 }

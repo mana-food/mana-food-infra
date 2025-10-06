@@ -6,8 +6,8 @@ module "aurora" {
   engine          = "aurora-mysql"
   engine_version  = "8.0.mysql_aurora.3.05.2" 
   database_name   = "appdb"
-  master_username = var.db_master_username
-  master_password = var.db_master_password
+  master_username               = "admin"
+  manage_master_user_password   = true 
 
   engine_mode = "provisioned"
   serverlessv2_scaling_configuration = {
