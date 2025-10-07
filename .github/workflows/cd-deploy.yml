@@ -293,13 +293,7 @@ jobs:
           aws lambda update-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --region sa-east-1 \
-            --environment "Variables={
-              \"AURORA_SECRET_ARN\":\"$AURORA_SECRET_ARN\",
-              \"ASPNETCORE_ENVIRONMENT\":\"Production\",
-              \"DATABASE_HOST\":\"$AURORA_ENDPOINT\",
-              \"DATABASE_NAME\":\"manafooddb\",
-              \"DATABASE_PORT\":\"3306\"
-            }"
+            --environment Variables="{\"AURORA_SECRET_ARN\":\"$AURORA_SECRET_ARN\",\"ASPNETCORE_ENVIRONMENT\":\"Production\",\"DATABASE_HOST\":\"$AURORA_ENDPOINT\",\"DATABASE_NAME\":\"manafooddb\",\"DATABASE_PORT\":\"3306\"}"
           
           # Aguardar atualização
           aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region sa-east-1
