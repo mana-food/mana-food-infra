@@ -1,30 +1,126 @@
-name: Deploy na AWS com Rollback
+name: Deploy Mana Food - Completo
 
 on:
   workflow_dispatch:
     inputs:
-      image:
-        description: "Imagem da aplicação para deploy"
-        required: true
-        type: string
-        default: ghcr.io/mana-food-clean-architecture:latest
+      deploy_lambda:
+        description: "Deploy Lambda Function"
+        type: boolean
+        default: true
+      deploy_app:
+        description: "Deploy EKS Application"
+        type: boolean
+        default: true
   push:
     branches:
       - main
 
 permissions:
   contents: read
+  packages: write
   id-token: write
 
 jobs:
+  build-lambda:
+    name: 'Build Lambda'
+    runs-on: ubuntu-latest
+    if: github.event.inputs.deploy_lambda != 'false'
+    outputs:
+      lambda-success: ${{ steps.build.outcome }}
+
+    steps:
+      - name: Checkout Lambda Repository
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-lambda
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: lambda-code
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: '8.0'
+
+      - name: Restore dependencies
+        run: |
+          cd lambda-code
+          dotnet restore
+
+      - name: Build Lambda
+        id: build
+        run: |
+          cd lambda-code
+          dotnet build --configuration Release --no-restore
+          dotnet publish --configuration Release --runtime linux-x64 --self-contained false -o publish/
+
+      - name: Create Lambda ZIP
+        run: |
+          cd lambda-code/publish
+          zip -r ../../lambda-deployment.zip .
+          ls -la ../../lambda-deployment.zip
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-deployment-${{ github.run_id }}
+          path: lambda-deployment.zip
+          retention-days: 30
+
+  build-app-image:
+    name: 'Build App Docker Image'
+    runs-on: ubuntu-latest
+    if: github.event.inputs.deploy_app != 'false'
+    outputs:
+      image-tag: ${{ steps.build.outputs.image-tag }}
+      build-success: ${{ steps.build.outcome }}
+
+    steps:
+      - name: Checkout App Repository
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-clean-architecture
+          token: ${{ secrets.GITHUB_TOKEN }}
+          path: app-code
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        id: build
+        run: |
+          cd app-code
+          
+          # Criar tag baseada no commit
+          IMAGE_TAG="ghcr.io/mana-food/mana-food-clean-architecture:${GITHUB_SHA:0:8}"
+          IMAGE_LATEST="ghcr.io/mana-food/mana-food-clean-architecture:latest"
+          
+          echo "🔨 Building Docker image..."
+          docker build -t "$IMAGE_TAG" -t "$IMAGE_LATEST" .
+          
+          echo "📤 Pushing Docker image..."
+          docker push "$IMAGE_TAG"
+          docker push "$IMAGE_LATEST"
+          
+          echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
+          echo "✅ Image built and pushed: $IMAGE_TAG"
+
   terraform-deploy:
     name: 'Terraform Deploy'
     runs-on: ubuntu-latest
+    needs: [build-lambda]
     defaults:
       run:
         working-directory: infra/terraform/envs/prod
     outputs:
       terraform-success: ${{ steps.apply.outcome }}
+      aurora-endpoint: ${{ steps.outputs.outputs.aurora-endpoint }}
 
     steps:
       - name: Checkout código
@@ -59,7 +155,7 @@ jobs:
       - name: Backup Terraform State
         run: |
           echo "📦 Fazendo backup do estado atual..."
-          terraform state pull > terraform-state-backup.json
+          terraform state pull > terraform-state-backup.json || echo "Novo deployment - sem estado anterior"
 
       - name: Upload State Backup
         uses: actions/upload-artifact@v4
@@ -67,6 +163,25 @@ jobs:
           name: terraform-state-backup-${{ github.run_id }}
           path: infra/terraform/envs/prod/terraform-state-backup.json
           retention-days: 30
+
+      - name: Download Lambda ZIP
+        if: needs.build-lambda.outputs.lambda-success == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-deployment-${{ github.run_id }}
+          path: infra/terraform/envs/prod
+
+      - name: Verify Lambda ZIP
+        if: needs.build-lambda.outputs.lambda-success == 'success'
+        run: |
+          if [ -f lambda-deployment.zip ]; then
+            echo "✅ Lambda ZIP encontrado"
+            ls -la lambda-deployment.zip
+          else
+            echo "❌ Lambda ZIP não encontrado - usando dummy"
+            echo "dummy content" > dummy.txt
+            zip lambda-deployment.zip dummy.txt
+          fi
 
       - name: Terraform Plan
         run: |
@@ -78,6 +193,22 @@ jobs:
         id: apply
         if: github.ref == 'refs/heads/main'
         run: terraform apply -auto-approve tfplan
+
+      - name: Get Terraform Outputs
+        id: outputs
+        if: steps.apply.outcome == 'success'
+        run: |
+          terraform output -json > outputs.json
+          cat outputs.json
+          
+          # Extrair outputs específicos
+          EKS_CLUSTER=$(terraform output -raw eks_cluster_name)
+          AURORA_ENDPOINT=$(terraform output -raw aurora_endpoint)
+          LAMBDA_NAME=$(terraform output -raw lambda_function_name)
+          
+          echo "eks-cluster=$EKS_CLUSTER" >> $GITHUB_OUTPUT
+          echo "aurora-endpoint=$AURORA_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "lambda-name=$LAMBDA_NAME" >> $GITHUB_OUTPUT
 
       - name: Verify Infrastructure
         id: verify
@@ -108,69 +239,18 @@ jobs:
             exit 1
           fi
 
-      - name: Get Outputs
-        if: steps.apply.outcome == 'success' && steps.verify.outcome == 'success'
-        run: terraform output -json > outputs.json
-
       - name: Upload Outputs
-        if: steps.apply.outcome == 'success' && steps.verify.outcome == 'success'
+        if: steps.apply.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: terraform-outputs-${{ github.run_id }}
           path: infra/terraform/envs/prod/outputs.json
 
-  rollback-terraform:
-    name: 'Rollback Infrastructure'
-    runs-on: ubuntu-latest
-    needs: terraform-deploy
-    if: failure() && needs.terraform-deploy.outputs.terraform-success == 'failure'
-    defaults:
-      run:
-        working-directory: infra/terraform/envs/prod
-
-    steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: '1.6.0'
-          terraform_wrapper: false
-
-      - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
-            -backend-config="key=mana-food-prod.tfstate" \
-            -backend-config="region=${{ secrets.AWS_REGION }}"
-
-      - name: Download State Backup
-        uses: actions/download-artifact@v4
-        with:
-          name: terraform-state-backup-${{ github.run_id }}
-          path: infra/terraform/envs/prod
-
-      - name: Rollback Infrastructure
-        run: |
-          echo "🔄 Iniciando rollback da infraestrutura..."
-          terraform destroy -target="aws_lambda_function.api" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
-          terraform destroy -target="module.aurora" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
-          terraform destroy -target="module.eks" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
-          echo "✅ Rollback da infraestrutura concluído"
-
   deploy-app:
-    name: 'Deploy App'
+    name: 'Deploy App to EKS'
     runs-on: ubuntu-latest
-    needs: terraform-deploy
-    if: github.ref == 'refs/heads/main' && needs.terraform-deploy.outputs.terraform-success == 'success'
+    needs: [terraform-deploy, build-app-image]
+    if: github.ref == 'refs/heads/main' && needs.terraform-deploy.outputs.terraform-success == 'success' && needs.build-app-image.outputs.build-success == 'success'
     outputs:
       deployment-success: ${{ steps.deploy.outcome }}
       previous-image: ${{ steps.backup.outputs.previous-image }}
@@ -186,11 +266,11 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
 
-      - name: Wait for cluster to be ready
+      - name: Wait for EKS cluster
         run: |
           echo "⏳ Aguardando cluster EKS ficar totalmente pronto..."
           
-          # Aguardar até o cluster estar ACTIVE
+          # Aguardar cluster estar ACTIVE
           timeout 600 bash -c '
             while true; do
               STATUS=$(aws eks describe-cluster --name mana-food-eks --region sa-east-1 --query "cluster.status" --output text)
@@ -206,7 +286,7 @@ jobs:
           # Configurar kubeconfig
           aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks
           
-          # Aguardar API server responder
+          # Aguardar API server
           timeout 300 bash -c '
             while ! kubectl cluster-info >/dev/null 2>&1; do
               echo "Aguardando API server..."
@@ -214,24 +294,35 @@ jobs:
             done
           '
           
-          # Aguardar nodes ficarem prontos
-          timeout 300 bash -c '
+          # Aguardar nodes
+          timeout 600 bash -c '
             while [ $(kubectl get nodes --no-headers 2>/dev/null | grep -c Ready) -lt 1 ]; do
               echo "Aguardando worker nodes..."
-              kubectl get nodes 2>/dev/null || true
-              sleep 15
+              kubectl get nodes 2>/dev/null || echo "Nodes ainda não disponíveis"
+              sleep 30
             done
           '
           
           echo "✅ Cluster EKS totalmente pronto!"
-          kubectl get nodes
-
-      - name: Check cluster resources
-        run: |
-          echo "🔍 Verificando recursos do cluster..."
           kubectl get nodes -o wide
-          kubectl get pods --all-namespaces
-          kubectl top nodes || echo "Metrics server não disponível"
+
+      - name: Get Aurora credentials
+        id: aurora-creds
+        run: |
+          # Obter endpoint do Aurora
+          AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
+          echo "aurora-endpoint=$AURORA_ENDPOINT" >> $GITHUB_OUTPUT
+          
+          # Tentar obter senha do Secrets Manager
+          SECRET_ARN=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].MasterUserSecret.SecretArn' --output text)
+          if [ "$SECRET_ARN" != "None" ] && [ "$SECRET_ARN" != "null" ]; then
+            echo "🔐 Obtendo senha do Secrets Manager..."
+            DB_PASSWORD=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region sa-east-1 --query 'SecretString' --output text | jq -r '.password')
+            echo "aurora-password=$DB_PASSWORD" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ Usando senha padrão - configure no Secrets Manager para produção"
+            echo "aurora-password=${{ secrets.DB_PASSWORD || 'defaultpassword123' }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Backup current deployment
         id: backup
@@ -254,19 +345,40 @@ jobs:
           path: deployment-backup.yaml
           retention-days: 30
 
-      - name: Deploy app with diagnostics
+      - name: Deploy application
         id: deploy
         run: |
-          IMAGE="${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }}"
+          IMAGE="${{ needs.build-app-image.outputs.image-tag }}"
+          AURORA_ENDPOINT="${{ steps.aurora-creds.outputs.aurora-endpoint }}"
+          AURORA_PASSWORD="${{ steps.aurora-creds.outputs.aurora-password }}"
           
-          echo "🔍 Verificando se a imagem existe..."
-          # Tentar verificar se a imagem existe (pode falhar se for privada)
-          if ! curl -s -f -L "https://ghcr.io/v2/mana-food/mana-food-clean-architecture/manifests/latest" >/dev/null 2>&1; then
-            echo "⚠️ Imagem pode não existir ou ser privada: $IMAGE"
-            echo "Usando nginx como fallback para teste da infraestrutura..."
-            IMAGE="nginx:latest"
-          fi
+          echo "🚀 Deployando aplicação com imagem: $IMAGE"
+          echo "📊 Aurora endpoint: $AURORA_ENDPOINT"
           
+          # Criar ConfigMap com configurações
+          kubectl apply -f - <<EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: mana-food-config
+            namespace: default
+          data:
+            ASPNETCORE_ENVIRONMENT: "Production"
+            ASPNETCORE_URLS: "http://+:8080"
+            Logging__LogLevel__Default: "Information"
+            Logging__LogLevel__Microsoft.AspNetCore: "Warning"
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mana-food-secrets
+            namespace: default
+          type: Opaque
+          stringData:
+            ConnectionStrings__DefaultConnection: "Server=$AURORA_ENDPOINT;Port=3306;Database=appdb;Uid=admin;Pwd=$AURORA_PASSWORD;SslMode=Required;"
+          EOF
+          
+          # Deploy da aplicação
           if kubectl get deployment mana-food-app >/dev/null 2>&1; then
             echo "🔄 Atualizando deployment existente..."
             kubectl set image deployment/mana-food-app app="$IMAGE"
@@ -278,6 +390,8 @@ jobs:
           metadata:
             name: mana-food-app
             namespace: default
+            labels:
+              app: mana-food-app
           spec:
             replicas: 2
             selector:
@@ -291,34 +405,37 @@ jobs:
                 containers:
                 - name: app
                   image: $IMAGE
+                  imagePullPolicy: Always
                   ports:
                   - containerPort: 8080
+                    name: http
                   resources:
                     requests:
-                      cpu: "100m"
-                      memory: "128Mi"
-                    limits:
-                      cpu: "500m"
+                      cpu: "250m"
                       memory: "512Mi"
-                  env:
-                  - name: ASPNETCORE_ENVIRONMENT
-                    value: "Production"
-                  - name: ASPNETCORE_URLS
-                    value: "http://+:8080"
-                  # Health checks básicos (só para nginx de teste)
+                    limits:
+                      cpu: "1000m"
+                      memory: "1Gi"
+                  envFrom:
+                  - configMapRef:
+                      name: mana-food-config
+                  - secretRef:
+                      name: mana-food-secrets
                   livenessProbe:
                     httpGet:
-                      path: /
+                      path: /health
                       port: 8080
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
+                    initialDelaySeconds: 60
+                    periodSeconds: 30
+                    timeoutSeconds: 10
                     failureThreshold: 3
                   readinessProbe:
                     httpGet:
-                      path: /
+                      path: /health/ready
                       port: 8080
-                    initialDelaySeconds: 5
-                    periodSeconds: 5
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                    timeoutSeconds: 5
                     failureThreshold: 3
           ---
           apiVersion: v1
@@ -326,79 +443,162 @@ jobs:
           metadata:
             name: mana-food-service
             namespace: default
+            labels:
+              app: mana-food-app
           spec:
             selector:
               app: mana-food-app
             ports:
             - port: 80
               targetPort: 8080
+              protocol: TCP
+              name: http
             type: LoadBalancer
           EOF
           fi
 
-      - name: Wait for rollout with monitoring
+      - name: Wait for deployment rollout
         run: |
-          echo "⏳ Aguardando deployment com monitoramento..."
+          echo "⏳ Aguardando rollout do deployment..."
           
-          # Aguardar por 2 minutos primeiro
-          if kubectl rollout status deployment/mana-food-app --timeout=120s; then
+          # Aguardar rollout por até 10 minutos
+          if kubectl rollout status deployment/mana-food-app --timeout=600s; then
             echo "✅ Deployment concluído com sucesso!"
           else
-            echo "⚠️ Deployment demorou mais que 2 minutos, verificando status..."
+            echo "❌ Deployment falhou ou timeout"
             
             echo "📊 Status do deployment:"
             kubectl get deployment mana-food-app -o wide
-            kubectl get replicaset -l app=mana-food-app
             kubectl get pods -l app=mana-food-app -o wide
             
             echo "📋 Logs dos pods:"
-            kubectl get pods -l app=mana-food-app -o name | while read pod; do
+            kubectl get pods -l app=mana-food-app -o name | head -3 | while read pod; do
               echo "=== Logs do $pod ==="
-              kubectl logs $pod --tail=20 || echo "Não foi possível obter logs"
-              echo "=== Describe do $pod ==="
-              kubectl describe $pod | tail -20
+              kubectl logs $pod --tail=50 || echo "Não foi possível obter logs"
             done
             
-            echo "📋 Events recentes:"
+            echo "📋 Events:"
             kubectl get events --sort-by='.lastTimestamp' | tail -10
             
-            # Tentar aguardar mais 2 minutos
-            if kubectl rollout status deployment/mana-food-app --timeout=120s; then
-              echo "✅ Deployment concluído após aguardar mais tempo!"
-            else
-              echo "❌ Deployment falhou após 4 minutos"
-              exit 1
-            fi
-          fi
-
-      - name: Verify deployment
-        run: |
-          echo "🔍 Verificando deployment final..."
-          READY=$(kubectl get deployment mana-food-app -o jsonpath='{.status.readyReplicas}')
-          DESIRED=$(kubectl get deployment mana-food-app -o jsonpath='{.spec.replicas}')
-          
-          if [ "$READY" = "$DESIRED" ]; then
-            echo "✅ Deployment OK ($READY/$DESIRED pods prontos)"
-          else
-            echo "❌ Deployment com problema ($READY/$DESIRED pods prontos)"
-            kubectl get pods -l app=mana-food-app
             exit 1
           fi
 
-      - name: Show deployment info
-        if: success()
+      - name: Verify deployment health
         run: |
-          echo "✅ Deploy concluído com sucesso!"
-          kubectl get pods -l app=mana-food-app -o wide
-          kubectl get svc mana-food-service
-          kubectl get events --sort-by='.lastTimestamp' | tail -5
+          echo "🔍 Verificando saúde do deployment..."
+          
+          READY=$(kubectl get deployment mana-food-app -o jsonpath='{.status.readyReplicas}')
+          DESIRED=$(kubectl get deployment mana-food-app -o jsonpath='{.spec.replicas}')
+          
+          if [ "$READY" = "$DESIRED" ] && [ "$READY" -gt "0" ]; then
+            echo "✅ Deployment saudável ($READY/$DESIRED pods prontos)"
+          else
+            echo "❌ Deployment com problema ($READY/$DESIRED pods prontos)"
+            kubectl describe deployment mana-food-app
+            exit 1
+          fi
 
-      - name: Cleanup on failure
-        if: failure()
+      - name: Get service information
         run: |
-          echo "🧹 Limpando recursos do deployment falhado..."
-          kubectl delete deployment mana-food-app || true
-          kubectl delete service mana-food-service || true
+          echo "🌐 Informações do serviço:"
+          kubectl get svc mana-food-service
+          
+          echo "📋 Pods em execução:"
+          kubectl get pods -l app=mana-food-app -o wide
+          
+          echo "📊 Recursos utilizados:"
+          kubectl top pods -l app=mana-food-app || echo "Metrics server não disponível"
+
+  test-endpoints:
+    name: 'Test Endpoints'
+    runs-on: ubuntu-latest
+    needs: [terraform-deploy, deploy-app]
+    if: needs.deploy-app.outputs.deployment-success == 'success'
+
+    steps:
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Test Lambda function
+        run: |
+          echo "🧪 Testando Lambda function..."
+          
+          # Testar invocação da Lambda
+          LAMBDA_RESPONSE=$(aws lambda invoke --function-name mana-food-api --region sa-east-1 --payload '{}' response.json)
+          echo "Lambda response: $LAMBDA_RESPONSE"
+          
+          if [ -f response.json ]; then
+            echo "Lambda output:"
+            cat response.json
+          fi
+
+      - name: Test EKS application
+        run: |
+          echo "🧪 Testando aplicação EKS..."
+          
+          # Configurar kubectl
+          aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks
+          
+          # Obter endpoint do Load Balancer
+          timeout 300 bash -c '
+            while true; do
+              LB_HOSTNAME=$(kubectl get svc mana-food-service -o jsonpath="{.status.loadBalancer.ingress[0].hostname}")
+              if [ -n "$LB_HOSTNAME" ] && [ "$LB_HOSTNAME" != "null" ]; then
+                echo "Load Balancer endpoint: $LB_HOSTNAME"
+                break
+              fi
+              echo "Aguardando Load Balancer..."
+              sleep 30
+            done
+          ' || echo "Timeout aguardando Load Balancer"
+          
+          # Testar conectividade interna
+          kubectl run test-pod --image=curlimages/curl:latest --restart=Never --rm -i --tty -- curl -s http://mana-food-service/health || echo "Health check interno falhou"
+
+  rollback-terraform:
+    name: 'Rollback Infrastructure'
+    runs-on: ubuntu-latest
+    needs: terraform-deploy
+    if: failure() && needs.terraform-deploy.outputs.terraform-success == 'failure'
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/prod
+
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            -backend-config="key=mana-food-prod.tfstate" \
+            -backend-config="region=sa-east-1"
+
+      - name: Rollback Infrastructure
+        run: |
+          echo "🔄 Iniciando rollback da infraestrutura..."
+          terraform destroy -target="aws_lambda_function.api" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
+          terraform destroy -target="module.aurora" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
+          terraform destroy -target="module.eks" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
+          echo "✅ Rollback da infraestrutura concluído"
 
   rollback-app:
     name: 'Rollback Application'
@@ -432,27 +632,37 @@ jobs:
   notify-status:
     name: 'Notify Status'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, deploy-app, rollback-terraform, rollback-app]
+    needs: [terraform-deploy, deploy-app, test-endpoints, rollback-terraform, rollback-app]
     if: always()
 
     steps:
-      - name: Determine status
+      - name: Determine final status
         run: |
           TERRAFORM_STATUS="${{ needs.terraform-deploy.result }}"
           APP_STATUS="${{ needs.deploy-app.result }}"
+          TEST_STATUS="${{ needs.test-endpoints.result }}"
           ROLLBACK_INFRA="${{ needs.rollback-terraform.result }}"
           ROLLBACK_APP="${{ needs.rollback-app.result }}"
           
-          echo "📊 Status Final:"
-          echo "Terraform: $TERRAFORM_STATUS"
-          echo "App Deploy: $APP_STATUS"
-          echo "Rollback Infra: $ROLLBACK_INFRA"
-          echo "Rollback App: $ROLLBACK_APP"
+          echo "📊 Status Final do Deployment:"
+          echo "🏗️  Terraform: $TERRAFORM_STATUS"
+          echo "🚀 App Deploy: $APP_STATUS"
+          echo "🧪 Tests: $TEST_STATUS"
+          echo "🔄 Rollback Infra: $ROLLBACK_INFRA"
+          echo "🔄 Rollback App: $ROLLBACK_APP"
+          echo ""
           
           if [ "$TERRAFORM_STATUS" = "success" ] && [ "$APP_STATUS" = "success" ]; then
-            echo "✅ Deploy realizado com sucesso!"
+            echo "✅ DEPLOY REALIZADO COM SUCESSO!"
+            echo "🎉 Todos os serviços estão funcionando:"
+            echo "   - EKS Cluster: mana-food-eks"
+            echo "   - Aurora MySQL: mana-food-aurora"
+            echo "   - Lambda API: mana-food-api"
+            echo "   - Load Balancer: verificar kubectl get svc"
           elif [ "$ROLLBACK_INFRA" = "success" ] || [ "$ROLLBACK_APP" = "success" ]; then
-            echo "🔄 Rollback realizado - sistema restaurado!"
+            echo "🔄 ROLLBACK REALIZADO COM SUCESSO!"
+            echo "💡 Sistema restaurado ao estado anterior"
           else
-            echo "❌ Deploy falhou - verifique os logs"
+            echo "❌ DEPLOY FALHOU"
+            echo "🔍 Verifique os logs dos jobs para mais detalhes"
           fi

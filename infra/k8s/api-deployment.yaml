@@ -1,32 +1,54 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: manafood-api
+  name: mana-food-app
+  namespace: default
+  labels:
+    app: mana-food-app
+    version: v1
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: manafood-api
+      app: mana-food-app
   template:
     metadata:
       labels:
-        app: manafood-api
+        app: mana-food-app
+        version: v1
     spec:
       containers:
-        - name: manafood-api
-          image: ghcr.io/mana-food-clean-architecture:latest
-          imagePullPolicy: IfNotPresent
-          ports:
-            - containerPort: 8080
-          envFrom:
-            - configMapRef:
-                name: manafood-config
-            - secretRef:
-                name: manafood-secrets
-          resources:
-            requests:
-              cpu: "100m"
-              memory: "128Mi"
-            limits:
-              cpu: "500m"
-              memory: "256Mi"
+      - name: app
+        image: ghcr.io/mana-food/mana-food-clean-architecture:latest
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 8080
+          name: http
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1000m"
+            memory: "1Gi"
+        envFrom:
+        - configMapRef:
+            name: mana-food-config
+        - secretRef:
+            name: mana-food-secrets
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health/ready
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
