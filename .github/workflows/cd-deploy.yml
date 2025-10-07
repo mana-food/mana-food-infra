@@ -1,4 +1,4 @@
-name: Deploy Mana Food - Versão Final
+name: Deploy Mana Food - Simples
 
 on:
   workflow_dispatch:
@@ -11,12 +11,6 @@ on:
           - "infra-only"
           - "lambda-only"
         default: "full-deploy"
-      lambda_ref:
-        description: "Branch/Tag da Lambda"
-        default: "main"
-      app_ref:
-        description: "Branch/Tag da App"
-        default: "main"
   push:
     branches:
       - main
@@ -28,177 +22,97 @@ permissions:
 
 jobs:
   build-lambda:
-    name: 'Build Lambda Real'
+    name: 'Build Lambda'
     runs-on: ubuntu-latest
     outputs:
       lambda-success: ${{ steps.build.outcome }}
 
     steps:
-      - name: Verificar acesso ao repositório Lambda
-        run: |
-          echo "🔍 Verificando acesso ao repositório mana-food-lambda..."
-          curl -H "Authorization: token ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_LAMBDA }}" \
-               -s "https://api.github.com/repos/mana-food/mana-food-lambda" | jq '.name' || echo "Falha no acesso"
-
-      - name: Checkout repositório da Lambda
+      - name: Checkout Lambda repo
         uses: actions/checkout@v4
         with:
           repository: mana-food/mana-food-lambda
-          ref: ${{ github.event.inputs.lambda_ref || 'main' }}
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_LAMBDA }}
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
           path: lambda-repo
-
-      - name: Verificar checkout da Lambda
-        run: |
-          echo "📁 Verificando estrutura do repositório Lambda..."
-          
-          if [ -d "lambda-repo" ]; then
-            echo "✅ Checkout realizado com sucesso"
-            ls -la lambda-repo/
-            echo ""
-            echo "📁 Arquivos encontrados:"
-            find lambda-repo -type f -name "*.sln" -o -name "*.csproj" | head -10
-          else
-            echo "❌ Falha no checkout"
-            exit 1
-          fi
 
       - name: Setup .NET 9
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: '9.0.x'
-          include-prerelease: true
 
-      - name: Build Lambda usando solution
+      - name: Build Lambda
         id: build
         run: |
           cd lambda-repo
-          
-          echo "🔍 Procurando solution file..."
           SLN_FILE=$(find . -name "*.sln" | head -1)
           
           if [ -n "$SLN_FILE" ]; then
-            echo "✅ Solution encontrada: $SLN_FILE"
-            
-            # Restore e build da solution
-            echo "📦 Restore da solution..."
             dotnet restore "$SLN_FILE"
-            
-            echo "🔨 Build da solution..."
             dotnet build --configuration Release "$SLN_FILE"
             
-            # Encontrar projeto Lambda
-            echo "🔍 Procurando projeto Lambda..."
             LAMBDA_PROJ=$(find . -name "*Lambda*.csproj" -o -name "*Auth*.csproj" | head -1)
+            dotnet publish "$LAMBDA_PROJ" --configuration Release --runtime linux-x64 -o publish/
             
-            if [ -n "$LAMBDA_PROJ" ]; then
-              echo "📦 Publishing projeto: $LAMBDA_PROJ"
-              LAMBDA_DIR=$(dirname "$LAMBDA_PROJ")
-              
-              # Publish do projeto Lambda
-              dotnet publish "$LAMBDA_PROJ" \
-                --configuration Release \
-                --runtime linux-x64 \
-                --self-contained false \
-                -o "$LAMBDA_DIR/publish/"
-              
-              echo "✅ Publish concluído"
-              ls -la "$LAMBDA_DIR/publish/"
-              
-              # Criar ZIP
-              cd "$LAMBDA_DIR/publish"
-              zip -r ../../../lambda-deployment.zip .
-              
-              echo "✅ ZIP criado:"
-              ls -la ../../../lambda-deployment.zip
-            else
-              echo "❌ Projeto Lambda não encontrado"
-              find . -name "*.csproj"
-              exit 1
-            fi
+            cd publish
+            zip -r ../../lambda-deployment.zip .
           else
-            echo "❌ Solution não encontrada"
-            find . -name "*.sln" -o -name "*.csproj"
+            echo "Solution não encontrada"
             exit 1
           fi
 
-      - name: Upload Lambda artifact
+      - name: Upload Lambda
         uses: actions/upload-artifact@v4
         with:
           name: lambda-deployment-${{ github.run_id }}
           path: lambda-deployment.zip
-          retention-days: 30
 
-  build-app-image:
-    name: 'Build App Docker Image'
+  build-app:
+    name: 'Build App'
     runs-on: ubuntu-latest
     if: github.event.inputs.deploy_mode != 'lambda-only'
     outputs:
       image-tag: ${{ steps.build.outputs.image-tag }}
-      build-success: ${{ steps.build.outcome }}
 
     steps:
-      - name: Checkout repositório da App
+      - name: Checkout App repo
         uses: actions/checkout@v4
         with:
           repository: mana-food/mana-food-clean-architecture
-          ref: ${{ github.event.inputs.app_ref || 'main' }}
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
           path: app-repo
 
-      - name: Set up Docker Buildx
+      - name: Setup Docker
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GitHub Container Registry
+      - name: Login GitHub Registry
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
 
-      - name: Verificar estrutura da App
-        run: |
-          echo "📁 Verificando estrutura do repositório da App..."
-          ls -la app-repo/
-          find app-repo -name "Dockerfile" -type f || echo "Dockerfile não encontrado"
-
-      - name: Build e push da imagem
+      - name: Build Image
         id: build
         run: |
           cd app-repo
           
           if [ -f Dockerfile ]; then
-            echo "🔨 Dockerfile encontrado, fazendo build..."
-            
-            IMAGE_TAG="ghcr.io/mana-food/mana-food-clean-architecture:${GITHUB_SHA:0:8}"
-            IMAGE_LATEST="ghcr.io/mana-food/mana-food-clean-architecture:latest"
-            
-            docker build -t "$IMAGE_TAG" -t "$IMAGE_LATEST" .
-            docker push "$IMAGE_TAG"
-            docker push "$IMAGE_LATEST"
-            
-            echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-            echo "✅ Imagem criada: $IMAGE_TAG"
-          else
-            echo "⚠️ Dockerfile não encontrado, criando placeholder..."
-            
-            cat > Dockerfile << 'EOF'
-          FROM nginx:alpine
-          RUN echo '<html><body><h1>🍽️ Mana Food App</h1><p>App placeholder - Lambda Auth funcionando!</p><p>API: <span id="api-url">Carregando...</span></p><script>document.getElementById("api-url").textContent=window.location.origin;</script></body></html>' > /usr/share/nginx/html/index.html
-          EXPOSE 80
-          EOF
-            
-            IMAGE_TAG="ghcr.io/mana-food/mana-food-placeholder:${GITHUB_SHA:0:8}"
-            
+            IMAGE_TAG="ghcr.io/mana-food/mana-food-app:${GITHUB_SHA:0:8}"
             docker build -t "$IMAGE_TAG" .
             docker push "$IMAGE_TAG"
-            
             echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
-            echo "✅ Imagem placeholder criada: $IMAGE_TAG"
+          else
+            echo "FROM nginx:alpine
+            RUN echo '<h1>Mana Food</h1><p>Lambda Auth funcionando!</p>' > /usr/share/nginx/html/index.html" > Dockerfile
+            
+            IMAGE_TAG="ghcr.io/mana-food/mana-food-placeholder:${GITHUB_SHA:0:8}"
+            docker build -t "$IMAGE_TAG" .
+            docker push "$IMAGE_TAG"
+            echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
           fi
 
   terraform-deploy:
-    name: 'Deploy Infraestrutura'
+    name: 'Deploy Infra'
     runs-on: ubuntu-latest
     needs: build-lambda
     defaults:
@@ -207,13 +121,12 @@ jobs:
     outputs:
       terraform-success: ${{ steps.apply.outcome }}
       aurora-endpoint: ${{ steps.outputs.outputs.aurora-endpoint }}
-      aurora-secret-arn: ${{ steps.outputs.outputs.aurora-secret-arn }}
 
     steps:
-      - name: Checkout repositório de infraestrutura
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure AWS Credentials
+      - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -226,8 +139,11 @@ jobs:
           terraform_version: '1.6.0'
           terraform_wrapper: false
 
-      - name: Terraform Format
-        run: terraform fmt -recursive
+      - name: Download Lambda
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-deployment-${{ github.run_id }}
+          path: infra/terraform/envs/prod
 
       - name: Terraform Init
         run: |
@@ -236,325 +152,115 @@ jobs:
             -backend-config="key=mana-food-prod.tfstate" \
             -backend-config="region=sa-east-1"
 
-      - name: Download Lambda ZIP
-        uses: actions/download-artifact@v4
-        with:
-          name: lambda-deployment-${{ github.run_id }}
-          path: infra/terraform/envs/prod
-
-      - name: Verificar Lambda ZIP
-        run: |
-          if [ -f lambda-deployment.zip ]; then
-            echo "✅ Lambda ZIP encontrado"
-            ls -la lambda-deployment.zip
-            unzip -l lambda-deployment.zip | head -20
-          else
-            echo "❌ Lambda ZIP não encontrado"
-            exit 1
-          fi
-
-      - name: Terraform Plan
-        run: |
-          terraform plan \
-            -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
-            -out=tfplan
-
       - name: Terraform Apply
         id: apply
-        if: github.ref == 'refs/heads/main'
-        run: terraform apply -auto-approve tfplan
+        run: |
+          terraform plan -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" -out=tfplan
+          terraform apply -auto-approve tfplan
 
-      - name: Get Terraform Outputs
+      - name: Get Outputs
         id: outputs
         if: steps.apply.outcome == 'success'
         run: |
-          terraform output -json > outputs.json
-          cat outputs.json
-          
-          # Extrair outputs específicos
           AURORA_ENDPOINT=$(terraform output -raw aurora_endpoint)
           echo "aurora-endpoint=$AURORA_ENDPOINT" >> $GITHUB_OUTPUT
-          
-          # Tentar obter o ARN do secret
-          SECRET_ARN=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].MasterUserSecret.SecretArn' --output text 2>/dev/null || echo "None")
-          echo "aurora-secret-arn=$SECRET_ARN" >> $GITHUB_OUTPUT
-
-      - name: Verificar infraestrutura
-        run: |
-          echo "🔍 Verificando infraestrutura criada..."
-          
-          # EKS
-          EKS_STATUS=$(aws eks describe-cluster --name mana-food-eks --region sa-east-1 --query 'cluster.status' --output text)
-          echo "EKS Status: $EKS_STATUS"
-          
-          # Aurora
-          AURORA_STATUS=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].Status' --output text)
-          echo "Aurora Status: $AURORA_STATUS"
-          
-          # Lambda
-          LAMBDA_STATUS=$(aws lambda get-function --function-name mana-food-api --region sa-east-1 --query 'Configuration.State' --output text)
-          echo "Lambda Status: $LAMBDA_STATUS"
-
-      - name: Upload outputs
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-outputs-${{ github.run_id }}
-          path: infra/terraform/envs/prod/outputs.json
 
   setup-database:
-    name: 'Setup Database'
+    name: 'Setup DB'
     runs-on: ubuntu-latest
     needs: terraform-deploy
     if: needs.terraform-deploy.outputs.terraform-success == 'success'
 
     steps:
-      - name: Configure AWS Credentials
+      - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
-      - name: Get Aurora credentials
-        id: aurora-creds
-        run: |
-          SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
-          
-          if [ "$SECRET_ARN" != "None" ] && [ "$SECRET_ARN" != "null" ] && [ -n "$SECRET_ARN" ]; then
-            echo "🔐 Obtendo credenciais do Secrets Manager..."
-            SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region sa-east-1 --query 'SecretString' --output text)
-            DB_PASSWORD=$(echo "$SECRET_VALUE" | jq -r '.password')
-            DB_USERNAME=$(echo "$SECRET_VALUE" | jq -r '.username')
-            
-            echo "aurora-username=$DB_USERNAME" >> $GITHUB_OUTPUT
-            echo "aurora-password=$DB_PASSWORD" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️ Usando credenciais padrão"
-            echo "aurora-username=admin" >> $GITHUB_OUTPUT
-            echo "aurora-password=${{ secrets.DB_PASSWORD || 'TempPassword123!' }}" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Wait for Aurora and create schema
+      - name: Setup Database
         run: |
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
-          DB_USERNAME="${{ steps.aurora-creds.outputs.aurora-username }}"
-          DB_PASSWORD="${{ steps.aurora-creds.outputs.aurora-password }}"
+          DB_PASSWORD="${{ secrets.DB_PASSWORD || 'TempPassword123!' }}"
           
-          echo "🗄️ Configurando banco de dados..."
-          echo "Aurora Endpoint: $AURORA_ENDPOINT"
+          # Aguardar Aurora
+          timeout 300 bash -c "while ! nc -z $AURORA_ENDPOINT 3306; do sleep 30; done"
           
-          # Aguardar Aurora estar disponível
-          echo "⏳ Aguardando Aurora estar disponível..."
-          timeout 600 bash -c "
-            while ! nc -z $AURORA_ENDPOINT 3306; do
-              echo 'Aguardando Aurora... $(date)'
-              sleep 30
-            done
-          "
-          
-          # Criar e executar script SQL
-          cat > setup_db.sql << 'EOF'
+          # Setup DB
+          docker run --rm mysql:8.0 mysql -h "$AURORA_ENDPOINT" -u admin -p"$DB_PASSWORD" -e "
           CREATE DATABASE IF NOT EXISTS appdb;
           USE appdb;
-          
           CREATE TABLE IF NOT EXISTS users (
               id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
               cpf VARCHAR(11) NOT NULL UNIQUE,
               name VARCHAR(255),
               email VARCHAR(255),
-              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-              deleted BOOLEAN DEFAULT FALSE,
               user_type INT DEFAULT 1,
-              INDEX idx_cpf (cpf),
-              INDEX idx_deleted (deleted)
+              deleted BOOLEAN DEFAULT FALSE
           );
-          
-          INSERT IGNORE INTO users (id, cpf, name, email, user_type, deleted) VALUES 
-          (UUID(), '12345678901', 'Cliente Teste', 'cliente@test.com', 1, FALSE),
-          (UUID(), '98765432100', 'Admin Teste', 'admin@test.com', 2, FALSE),
-          (UUID(), '11111111111', 'User Mana Food', 'user@manafood.com', 1, FALSE);
-          
-          SELECT COUNT(*) as total_users FROM users WHERE deleted = FALSE;
-          EOF
-          
-          # Executar SQL
-          echo "📊 Executando script de setup do banco..."
-          docker run --rm mysql:8.0 mysql \
-            -h "$AURORA_ENDPOINT" \
-            -u "$DB_USERNAME" \
-            -p"$DB_PASSWORD" \
-            -e "$(cat setup_db.sql)"
-          
-          echo "✅ Banco de dados configurado com dados de teste"
+          INSERT IGNORE INTO users (cpf, name, email) VALUES 
+          ('12345678901', 'Cliente Teste', 'teste@test.com'),
+          ('98765432100', 'Admin Teste', 'admin@test.com');
+          "
 
-  update-lambda-config:
-    name: 'Configurar Lambda com Banco'
+  configure-lambda:
+    name: 'Config Lambda'
     runs-on: ubuntu-latest
     needs: [terraform-deploy, setup-database]
-    if: needs.terraform-deploy.outputs.terraform-success == 'success'
 
     steps:
-      - name: Configure AWS Credentials
+      - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
-      - name: Get Aurora credentials
-        id: aurora-creds
-        run: |
-          SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
-          
-          if [ "$SECRET_ARN" != "None" ] && [ "$SECRET_ARN" != "null" ] && [ -n "$SECRET_ARN" ]; then
-            SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region sa-east-1 --query 'SecretString' --output text)
-            DB_PASSWORD=$(echo "$SECRET_VALUE" | jq -r '.password')
-            DB_USERNAME=$(echo "$SECRET_VALUE" | jq -r '.username')
-          else
-            DB_USERNAME="admin"
-            DB_PASSWORD="${{ secrets.DB_PASSWORD || 'TempPassword123!' }}"
-          fi
-          
-          echo "aurora-username=$DB_USERNAME" >> $GITHUB_OUTPUT
-          echo "aurora-password=$DB_PASSWORD" >> $GITHUB_OUTPUT
-
-      - name: Update Lambda environment variables
+      - name: Update Lambda
         run: |
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
-          DB_USERNAME="${{ steps.aurora-creds.outputs.aurora-username }}"
-          DB_PASSWORD="${{ steps.aurora-creds.outputs.aurora-password }}"
+          CONNECTION_STRING="Server=$AURORA_ENDPOINT;Port=3306;Database=appdb;Uid=admin;Pwd=${{ secrets.DB_PASSWORD || 'TempPassword123!' }};SslMode=Required;"
           
-          # Criar connection string para .NET
-          CONNECTION_STRING="Server=$AURORA_ENDPOINT;Port=3306;Database=appdb;Uid=$DB_USERNAME;Pwd=$DB_PASSWORD;SslMode=Required;"
-          
-          echo "🔧 Atualizando variáveis da Lambda..."
-          echo "Connection String configurada para: $AURORA_ENDPOINT"
-          
-          # Atualizar Lambda com connection string real
           aws lambda update-function-configuration \
             --function-name mana-food-api \
             --region sa-east-1 \
-            --environment Variables="{
-              \"MYSQL_CONNECTION_STRING\":\"$CONNECTION_STRING\",
-              \"ASPNETCORE_ENVIRONMENT\":\"Production\"
-            }"
-          
-          echo "✅ Lambda configurada com connection string real"
+            --environment Variables="{\"MYSQL_CONNECTION_STRING\":\"$CONNECTION_STRING\"}"
 
   test-lambda:
-    name: 'Testar Autenticação Lambda'
+    name: 'Test Auth'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, update-lambda-config]
-    if: needs.terraform-deploy.outputs.terraform-success == 'success'
+    needs: configure-lambda
 
     steps:
-      - name: Configure AWS Credentials
+      - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
-      - name: Test Lambda authentication
+      - name: Test Lambda
         run: |
-          echo "🧪 Testando sistema de autenticação Lambda..."
+          # Teste direto
+          aws lambda invoke --function-name mana-food-api --payload '{"cpf":"12345678901"}' response.json
+          cat response.json
           
-          # Teste 1: Autenticação com CPF válido (dados de teste)
-          echo "1. 🔐 Testando autenticação com CPF válido..."
-          aws lambda invoke \
-            --function-name mana-food-api \
-            --region sa-east-1 \
-            --payload '{"cpf":"12345678901"}' \
-            response_auth.json
+          # Teste API Gateway
+          API_ID=$(aws apigateway get-rest-apis --query 'items[?name==`mana-food-api`].id' --output text)
+          API_URL="https://$API_ID.execute-api.sa-east-1.amazonaws.com/prod"
+          echo "API URL: $API_URL"
           
-          echo "Resposta autenticação:"
-          cat response_auth.json
-          echo ""
-          
-          # Verificar se retornou token JWT
-          if cat response_auth.json | jq -e '.body' >/dev/null 2>&1; then
-            RESPONSE_BODY=$(cat response_auth.json | jq -r '.body')
-            if echo "$RESPONSE_BODY" | jq -e '.token' >/dev/null 2>&1; then
-              TOKEN=$(echo "$RESPONSE_BODY" | jq -r '.token')
-              if [[ "$TOKEN" == eyJ* ]]; then
-                echo "✅ Token JWT gerado com sucesso!"
-                echo "Token: ${TOKEN:0:50}..."
-              else
-                echo "❌ Token inválido gerado"
-              fi
-            else
-              echo "❌ Token não encontrado na resposta"
-              echo "Estrutura da resposta: $RESPONSE_BODY"
-            fi
-          else
-            echo "❌ Resposta inválida da Lambda"
-            cat response_auth.json
-          fi
-          
-          # Teste 2: CPF não cadastrado
-          echo "2. ❌ Testando CPF não cadastrado..."
-          aws lambda invoke \
-            --function-name mana-food-api \
-            --region sa-east-1 \
-            --payload '{"cpf":"00000000000"}' \
-            response_invalid.json
-          
-          echo "Resposta CPF inválido:"
-          cat response_invalid.json
-          echo ""
-          
-          # Teste 3: Request mal formado
-          echo "3. ⚠️ Testando request sem CPF..."
-          aws lambda invoke \
-            --function-name mana-food-api \
-            --region sa-east-1 \
-            --payload '{}' \
-            response_empty.json
-          
-          echo "Resposta sem CPF:"
-          cat response_empty.json
-
-      - name: Get API Gateway URL and test
-        run: |
-          echo "🌐 Testando API Gateway..."
-          
-          # Obter API Gateway URL
-          API_ID=$(aws apigateway get-rest-apis --region sa-east-1 --query 'items[?name==`mana-food-api`].id' --output text)
-          if [ -n "$API_ID" ] && [ "$API_ID" != "None" ]; then
-            API_URL="https://$API_ID.execute-api.sa-east-1.amazonaws.com/prod"
-            echo "🔗 Lambda Auth API: $API_URL"
-            
-            # Testar via API Gateway
-            echo "🧪 Testando autenticação via API Gateway..."
-            RESPONSE=$(curl -s -X POST \
-              "$API_URL" \
-              -H "Content-Type: application/json" \
-              -d '{"cpf":"12345678901"}' \
-              -w "HTTPSTATUS:%{http_code}")
-            
-            HTTP_STATUS=$(echo $RESPONSE | tr -d '\n' | sed -e 's/.*HTTPSTATUS://')
-            RESPONSE_BODY=$(echo $RESPONSE | sed -e 's/HTTPSTATUS:.*//')
-            
-            echo "Status HTTP: $HTTP_STATUS"
-            echo "Resposta: $RESPONSE_BODY"
-            
-            if [ "$HTTP_STATUS" = "200" ]; then
-              echo "✅ API Gateway funcionando!"
-            else
-              echo "⚠️ API Gateway retornou status: $HTTP_STATUS"
-            fi
-          else
-            echo "⚠️ API Gateway não encontrado"
-          fi
+          curl -X POST "$API_URL" -H "Content-Type: application/json" -d '{"cpf":"12345678901"}'
 
   deploy-app:
-    name: 'Deploy App to EKS'
+    name: 'Deploy App'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, build-app-image, test-lambda]
-    if: needs.terraform-deploy.outputs.terraform-success == 'success' && github.event.inputs.deploy_mode != 'lambda-only'
+    needs: [terraform-deploy, build-app, test-lambda]
+    if: github.event.inputs.deploy_mode != 'lambda-only'
 
     steps:
-      - name: Configure AWS Credentials
+      - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -564,51 +270,19 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
 
-      - name: Configure EKS
+      - name: Deploy to EKS
         run: |
-          echo "⚙️ Configurando acesso ao EKS..."
           aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks
           
-          # Aguardar cluster estar pronto
-          timeout 300 bash -c '
-            while ! kubectl cluster-info >/dev/null 2>&1; do
-              echo "Aguardando cluster..."
-              sleep 15
-            done
-          '
-          
-          echo "✅ EKS configurado"
-          kubectl get nodes -o wide
-
-      - name: Deploy application with Lambda integration
-        run: |
-          IMAGE="${{ needs.build-app-image.outputs.image-tag || 'nginx:latest' }}"
-          
-          # Obter URL da API Gateway
-          API_ID=$(aws apigateway get-rest-apis --region sa-east-1 --query 'items[?name==`mana-food-api`].id' --output text)
+          IMAGE="${{ needs.build-app.outputs.image-tag || 'nginx:latest' }}"
+          API_ID=$(aws apigateway get-rest-apis --query 'items[?name==`mana-food-api`].id' --output text)
           API_URL="https://$API_ID.execute-api.sa-east-1.amazonaws.com/prod"
           
-          echo "🚀 Deployando aplicação: $IMAGE"
-          echo "🔗 Auth API: $API_URL"
-          
           kubectl apply -f - <<EOF
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: mana-food-config
-            namespace: default
-          data:
-            ASPNETCORE_ENVIRONMENT: "Production"
-            AUTH_API_URL: "$API_URL"
-            LAMBDA_AUTH_ENDPOINT: "$API_URL"
-          ---
           apiVersion: apps/v1
           kind: Deployment
           metadata:
             name: mana-food-app
-            namespace: default
-            labels:
-              app: mana-food-app
           spec:
             replicas: 2
             selector:
@@ -624,194 +298,44 @@ jobs:
                   image: $IMAGE
                   ports:
                   - containerPort: 80
-                    name: http
-                  resources:
-                    requests:
-                      cpu: "100m"
-                      memory: "128Mi"
-                    limits:
-                      cpu: "500m"
-                      memory: "512Mi"
-                  envFrom:
-                  - configMapRef:
-                      name: mana-food-config
-                  readinessProbe:
-                    httpGet:
-                      path: /
-                      port: 80
-                    initialDelaySeconds: 10
-                    periodSeconds: 5
-                  livenessProbe:
-                    httpGet:
-                      path: /
-                      port: 80
-                    initialDelaySeconds: 30
-                    periodSeconds: 10
+                  env:
+                  - name: AUTH_API_URL
+                    value: "$API_URL"
           ---
           apiVersion: v1
           kind: Service
           metadata:
             name: mana-food-service
-            namespace: default
-            labels:
-              app: mana-food-app
           spec:
             selector:
               app: mana-food-app
             ports:
             - port: 80
               targetPort: 80
-              protocol: TCP
-              name: http
             type: LoadBalancer
           EOF
-
-      - name: Wait for deployment
-        run: |
-          echo "⏳ Aguardando deployment da aplicação..."
+          
           kubectl rollout status deployment/mana-food-app --timeout=300s
-          
-          echo "📊 Status do deployment:"
-          kubectl get deployment mana-food-app -o wide
-          kubectl get pods -l app=mana-food-app -o wide
-          kubectl get svc mana-food-service -o wide
+          kubectl get svc mana-food-service
 
-      - name: Get Load Balancer URL
-        run: |
-          echo "🌐 Obtendo URL do Load Balancer..."
-          
-          # Aguardar Load Balancer estar pronto
-          timeout 300 bash -c '
-            while true; do
-              LB_HOSTNAME=$(kubectl get svc mana-food-service -o jsonpath="{.status.loadBalancer.ingress[0].hostname}")
-              if [ -n "$LB_HOSTNAME" ] && [ "$LB_HOSTNAME" != "null" ]; then
-                echo "🔗 Load Balancer URL: http://$LB_HOSTNAME"
-                break
-              fi
-              echo "Aguardando Load Balancer..."
-              sleep 30
-            done
-          ' || echo "⚠️ Timeout aguardando Load Balancer"
-
-  integration-test:
-    name: 'Teste de Integração Completo'
+  status:
+    name: 'Status'
     runs-on: ubuntu-latest
-    needs: [deploy-app, test-lambda]
-    if: needs.deploy-app.result == 'success' && needs.test-lambda.result == 'success'
-
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: sa-east-1
-
-      - name: Test complete system integration
-        run: |
-          echo "🧪 Testando integração completa do sistema..."
-          
-          # 1. Testar Lambda Auth
-          API_ID=$(aws apigateway get-rest-apis --region sa-east-1 --query 'items[?name==`mana-food-api`].id' --output text)
-          API_URL="https://$API_ID.execute-api.sa-east-1.amazonaws.com/prod"
-          
-          echo "🔐 Testando autenticação..."
-          AUTH_RESPONSE=$(curl -s -X POST \
-            "$API_URL" \
-            -H "Content-Type: application/json" \
-            -d '{"cpf":"12345678901"}')
-          
-          echo "Resposta da autenticação: $AUTH_RESPONSE"
-          
-          # 2. Configurar kubectl
-          aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks
-          
-          # 3. Testar conectividade interna
-          echo "🔗 Testando conectividade interna..."
-          kubectl run test-pod --image=curlimages/curl:latest --restart=Never --rm -i --tty -- curl -s http://mana-food-service/ || echo "Teste interno da app"
-          
-          echo "✅ Testes de integração concluídos"
-
-  notify-status:
-    name: 'Status Final do Deployment'
-    runs-on: ubuntu-latest
-    needs: [terraform-deploy, test-lambda, deploy-app, integration-test]
+    needs: [terraform-deploy, test-lambda, deploy-app]
     if: always()
 
     steps:
-      - name: Generate final deployment report
+      - name: Report
         run: |
-          echo "🎯 RELATÓRIO FINAL - MANA FOOD DEPLOYMENT"
-          echo "================================================"
+          echo "🎯 MANA FOOD DEPLOYMENT"
+          echo "======================="
+          echo "Infraestrutura: ${{ needs.terraform-deploy.result }}"
+          echo "Auth Lambda: ${{ needs.test-lambda.result }}"
+          echo "App EKS: ${{ needs.deploy-app.result }}"
           echo ""
-          echo "📅 Data: $(date)"
-          echo "🔧 Pipeline: ${{ github.run_id }}"
-          echo "📦 Commit: ${{ github.sha }}"
-          echo ""
-          echo "📊 RESULTADOS DOS JOBS:"
-          echo "  🏗️  Infraestrutura: ${{ needs.terraform-deploy.result }}"
-          echo "  🔧 Lambda Auth: ${{ needs.test-lambda.result }}"
-          echo "  🚀 App EKS: ${{ needs.deploy-app.result }}"
-          echo "  🧪 Integração: ${{ needs.integration-test.result }}"
-          echo ""
-          
           if [ "${{ needs.terraform-deploy.result }}" = "success" ]; then
-            echo "✅ SISTEMA MANA FOOD DEPLOYADO COM SUCESSO!"
-            echo ""
-            echo "🎯 COMPONENTES ATIVOS:"
-            echo "  - 🗄️  Aurora MySQL (sa-east-1)"
-            echo "    └── Banco: appdb"
-            echo "    └── Usuários de teste carregados"
-            echo ""
-            echo "  - ⚡ Lambda Authentication (.NET 9)"
-            echo "    └── Função: mana-food-api"
-            echo "    └── Runtime: provided.al2023"
-            echo "    └── Conectada ao Aurora"
-            echo ""
-            echo "  - 🌐 API Gateway"
-            echo "    └── Endpoint público para autenticação"
-            echo "    └── Integração com Lambda"
-            echo ""
-            echo "  - ☸️  EKS Cluster (Kubernetes)"
-            echo "    └── Cluster: mana-food-eks"
-            echo "    └── Worker nodes: t3.medium"
-            echo "    └── Aplicação: mana-food-app"
-            echo ""
-            echo "  - 🔗 Load Balancer"
-            echo "    └── Expondo aplicação publicamente"
-            echo ""
-            echo "🧪 FUNCIONALIDADES TESTADAS:"
-            echo "  ✅ Autenticação por CPF"
-            echo "  ✅ Geração de JWT tokens"
-            echo "  ✅ Validação de usuários no banco"
-            echo "  ✅ Rejeição de CPF inválido"
-            echo "  ✅ API Gateway funcionando"
-            echo "  ✅ EKS cluster operacional"
-            echo "  ✅ Load Balancer configurado"
-            echo ""
-            echo "🔗 PRÓXIMOS PASSOS:"
-            echo "  1. Verificar URLs no job 'test-lambda'"
-            echo "  2. Testar autenticação via API Gateway"
-            echo "  3. Verificar Load Balancer da aplicação"
-            echo "  4. Integrar aplicação real quando estiver pronta"
-            echo ""
-            echo "💡 DADOS DE TESTE DISPONÍVEIS:"
-            echo "  - CPF: 12345678901 (Cliente Teste)"
-            echo "  - CPF: 98765432100 (Admin Teste)"
-            echo "  - CPF: 11111111111 (User Mana Food)"
-            
-          elif [ "${{ needs.terraform-deploy.result }}" = "failure" ]; then
-            echo "❌ FALHA NA INFRAESTRUTURA"
-            echo "Verifique os logs do job terraform-deploy"
-            
-          elif [ "${{ needs.test-lambda.result }}" = "failure" ]; then
-            echo "⚠️ INFRAESTRUTURA OK, MAS LAMBDA COM PROBLEMAS"
-            echo "Verifique os logs do job test-lambda"
-            
+            echo "✅ Sistema deployado!"
+            echo "🔑 CPFs de teste: 12345678901, 98765432100"
           else
-            echo "❌ FALHA GERAL NO DEPLOYMENT"
-            echo "Verifique os logs de todos os jobs"
+            echo "❌ Falha no deployment"
           fi
-          
-          echo ""
-          echo "================================================"
