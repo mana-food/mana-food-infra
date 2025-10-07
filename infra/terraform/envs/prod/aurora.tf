@@ -14,7 +14,7 @@ module "aurora" {
   name           = "${var.project_name}-aurora"
   engine         = "aurora-mysql"
   engine_version = "8.0.mysql_aurora.3.10.1"
-  database_name  = "appdb"
+  database_name  = "manafooddb"
   
   master_username             = "admin"
   manage_master_user_password = true

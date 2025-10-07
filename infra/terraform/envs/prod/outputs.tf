@@ -34,6 +34,12 @@ output "aurora_database_name" {
   value       = module.aurora.cluster_database_name
 }
 
+output "aurora_secret_arn" {
+  description = "ARN do secret do Aurora no Secrets Manager"
+  value       = module.aurora.cluster_master_user_secret[0].secret_arn
+  sensitive   = true
+}
+
 # Lambda Outputs
 output "lambda_function_name" {
   description = "Nome da função Lambda"

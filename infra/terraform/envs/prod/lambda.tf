@@ -121,11 +121,12 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      AURORA_ENDPOINT        = module.aurora.cluster_endpoint
-      AURORA_PORT           = "3306"
-      DATABASE_NAME         = "manafooddb"
+      # ✅ NOVA CONFIGURAÇÃO: Secrets Manager
+      AURORA_SECRET_ARN      = module.aurora.cluster_master_user_secret[0].secret_arn
       ASPNETCORE_ENVIRONMENT = "Production"
-      # ❌ REMOVIDO AWS_REGION (variável reservada)
+      DATABASE_HOST          = module.aurora.cluster_endpoint
+      DATABASE_NAME          = "manafooddb"
+      DATABASE_PORT          = "3306"
     }
   }
 
