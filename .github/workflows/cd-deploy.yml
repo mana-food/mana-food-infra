@@ -174,7 +174,6 @@ jobs:
       terraform-success: ${{ steps.apply.outcome }}
       aurora-endpoint: ${{ steps.outputs.outputs.aurora-endpoint }}
       aurora-secret-arn: ${{ steps.outputs.outputs.aurora-secret-arn }}
-      db-setup-function: ${{ steps.outputs.outputs.db-setup-function }}
 
     steps:
       - name: Checkout
@@ -222,10 +221,6 @@ jobs:
           # Obter ARN do secret do Aurora
           SECRET_ARN=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].MasterUserSecret.SecretArn' --output text 2>/dev/null || echo "None")
           echo "aurora-secret-arn=$SECRET_ARN" >> $GITHUB_OUTPUT
-          
-          # Obter nome da função de setup do DB
-          DB_SETUP_FUNCTION=$(terraform output -raw lambda_db_setup_function_name)
-          echo "db-setup-function=$DB_SETUP_FUNCTION" >> $GITHUB_OUTPUT
 
   wait-aurora:
     name: 'Aguardar Aurora Disponível'
@@ -233,8 +228,7 @@ jobs:
     needs: terraform-deploy
     if: needs.terraform-deploy.outputs.terraform-success == 'success'
     outputs:
-      connection-string: ${{ steps.invoke.outputs.connection-string }}
-      setup-success: ${{ steps.invoke.outcome }}
+      connection-string: ${{ steps.connection.outputs.connection-string }}
 
     steps:
       - name: Configure AWS
@@ -260,38 +254,12 @@ jobs:
             done
           "
 
-      - name: Setup Database via Lambda
-        id: invoke
+      - name: Create connection string
+        id: connection
         run: |
-          DB_SETUP_FUNCTION="${{ needs.terraform-deploy.outputs.db-setup-function }}"
           SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
           
-          echo "🚀 Executando setup do banco via Lambda: $DB_SETUP_FUNCTION"
-          
-          # Invocar a Lambda de setup
-          PAYLOAD='{"password": "${{ secrets.DB_PASSWORD || 'TempPassword123!' }}"}'
-          
-          aws lambda invoke \
-            --function-name "$DB_SETUP_FUNCTION" \
-            --payload "$PAYLOAD" \
-            --region sa-east-1 \
-            response.json
-          
-          echo "📄 Resposta da Lambda:"
-          cat response.json
-          echo ""
-          
-          # Verificar se houve erro
-          if grep -q '"statusCode": 200' response.json; then
-            echo "✅ Setup do banco executado com sucesso!"
-          else
-            echo "❌ Erro no setup do banco"
-            cat response.json
-            exit 1
-          fi
-          
-          # Obter connection string
           if [ "$SECRET_ARN" != "None" ] && [ "$SECRET_ARN" != "null" ] && [ -n "$SECRET_ARN" ]; then
             echo "🔐 Obtendo credenciais do AWS Secrets Manager..."
             SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region sa-east-1 --query 'SecretString' --output text)
@@ -307,7 +275,8 @@ jobs:
           CONNECTION_STRING="Server=$AURORA_ENDPOINT;Port=3306;Database=manafooddb;Uid=$DB_USERNAME;Pwd=$DB_PASSWORD;SslMode=Required;"
           
           echo "connection-string=$CONNECTION_STRING" >> $GITHUB_OUTPUT
-          echo "✅ Connection string preparada"
+          echo "✅ Connection string preparada para aplicação .NET 9"
+          echo "📋 A aplicação .NET 9 criará o banco automaticamente via migrations"
 
   configure-lambda:
     name: 'Config Lambda .NET 9'
@@ -379,6 +348,7 @@ jobs:
           echo "📱 API .NET 9: $API_IMAGE"
           echo "⚡ Lambda .NET 9: $LAMBDA_AUTH_URL"
           echo "🗄️ Aurora RDS: $AURORA_ENDPOINT"
+          echo "📋 API .NET 9 aplicará migrations automaticamente"
           
           # Deploy seguindo arquitetura obrigatória
           kubectl apply -f - <<EOF
@@ -447,13 +417,13 @@ jobs:
                     httpGet:
                       path: /swagger
                       port: 8080
-                    initialDelaySeconds: 120
+                    initialDelaySeconds: 180
                     periodSeconds: 30
                   readinessProbe:
                     httpGet:
                       path: /swagger
                       port: 8080
-                    initialDelaySeconds: 60
+                    initialDelaySeconds: 120
                     periodSeconds: 15
           ---
           # Gateway .NET 9 Deployment
@@ -539,7 +509,7 @@ jobs:
           
           echo ""
           echo "🔍 Logs da API (migrations):"
-          kubectl logs deployment/mana-food-api --tail=20 || echo "Logs ainda não disponíveis"
+          kubectl logs deployment/mana-food-api --tail=30 || echo "Logs ainda não disponíveis"
           
           echo ""
           echo "🌐 Aguardando Load Balancer do Gateway..."
@@ -630,7 +600,7 @@ jobs:
           echo "======================================"
           echo "Infraestrutura: ${{ needs.terraform-deploy.result }}"
           echo "Build Apps: ${{ needs.build-apps.result }}"
-          echo "Aurora Setup: ${{ needs.wait-aurora.result }}"
+          echo "Aurora Wait: ${{ needs.wait-aurora.result }}"
           echo "Lambda Config: ${{ needs.configure-lambda.result }}"
           echo "Apps Deploy: ${{ needs.deploy-apps.result }}"
           echo "Rollback: ${{ needs.rollback.result }}"
@@ -658,6 +628,7 @@ jobs:
             echo "  • Aplicação aplica migrations na inicialização"
             echo "  • Lambda serverless AWS + Gateway/App no EKS"
             echo "  • Todos conectam ao mesmo Aurora MySQL"
+            echo "  • APENAS .NET 9 (sem Lambda Python)"
             echo "  • NÃO usou setup via Docker externo"
           else
             echo "❌ Falha no deployment"

@@ -45,11 +45,6 @@ output "lambda_function_arn" {
   value       = aws_lambda_function.api.arn
 }
 
-output "lambda_db_setup_function_name" {
-  description = "Nome da função Lambda de setup do DB"
-  value       = aws_lambda_function.db_setup.function_name
-}
-
 output "lambda_api_url" {
   description = "URL da API Gateway para Lambda"
   value       = "https://${aws_api_gateway_rest_api.lambda_api.id}.execute-api.${var.aws_region}.amazonaws.com/${aws_api_gateway_stage.lambda_stage.stage_name}"
@@ -81,7 +76,6 @@ output "deployment_info" {
     eks_cluster          = module.eks.cluster_name
     aurora_cluster       = module.aurora.cluster_id
     lambda_function      = aws_lambda_function.api.function_name
-    lambda_db_setup      = aws_lambda_function.db_setup.function_name
     api_gateway_url      = "https://${aws_api_gateway_rest_api.lambda_api.id}.execute-api.${var.aws_region}.amazonaws.com/${aws_api_gateway_stage.lambda_stage.stage_name}"
   }
 }
