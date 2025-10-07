@@ -282,40 +282,38 @@ jobs:
           aws-region: sa-east-1
 
       - name: Configure Lambda with Secrets Manager
+        shell: bash
         run: |
+          set -euo pipefail
+          # Desabilita history expansion para não interferir com '!' do ARN
+          set +H
+
           AURORA_SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
           LAMBDA_FUNCTION_NAME="${{ needs.terraform-deploy.outputs.lambda-function-name }}"
-          
+
           echo "🔧 Configurando Lambda .NET 9 com AWS Secrets Manager..."
-          echo "Secret ARN: $AURORA_SECRET_ARN"
-          
-          # ✅ CORREÇÃO FINAL: Usar arquivo JSON temporário para evitar problemas de escape
-          cat > /tmp/lambda-env.json << EOF
-          {
-            "AURORA_SECRET_ARN": "$AURORA_SECRET_ARN",
-            "ASPNETCORE_ENVIRONMENT": "Production",
-            "DATABASE_HOST": "$AURORA_ENDPOINT",
-            "DATABASE_NAME": "manafooddb",
-            "DATABASE_PORT": "3306"
-          }
-          EOF
-          
-          # Aplicar configuração usando arquivo
+          echo "🔐 Secret ARN: $AURORA_SECRET_ARN"
+          echo "🗄️ RDS Endpoint: $AURORA_ENDPOINT"
+          echo "⚡ Função: $LAMBDA_FUNCTION_NAME"
+
+          # Formato exigido: Variables={K=V,K=V,...} (NÃO usar JSON)
+          ENV_VARS="AURORA_SECRET_ARN=$AURORA_SECRET_ARN,ASPNETCORE_ENVIRONMENT=Production,DATABASE_HOST=$AURORA_ENDPOINT,DATABASE_NAME=manafooddb,DATABASE_PORT=3306"
+
           aws lambda update-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --region sa-east-1 \
-            --environment "Variables=$(cat /tmp/lambda-env.json | jq -c .)"
-          
-          # Aguardar atualização
-          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region sa-east-1
-          
-          echo "✅ Lambda .NET 9 configurada com AWS Secrets Manager"
-          echo "🔐 Lambda obterá credenciais dinamicamente do secret: $AURORA_SECRET_ARN"
-          
-          # Limpar arquivo temporário
-          rm /tmp/lambda-env.json
+            --environment "Variables={$ENV_VARS}"
 
+          echo "⏳ Aguardando atualização..."
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region sa-east-1
+
+          echo "✅ Lambda atualizada. Variáveis aplicadas:"
+          aws lambda get-function-configuration \
+            --function-name "$LAMBDA_FUNCTION_NAME" \
+            --query 'Environment.Variables' \
+            --region sa-east-1
+            
   deploy-apps:
     name: 'Deploy Gateway & API .NET 9 no EKS'
     runs-on: ubuntu-latest
