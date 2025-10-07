@@ -98,8 +98,188 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
   }
 }
 
+resource "aws_cloudwatch_log_group" "lambda_db_setup_logs" {
+  name              = "/aws/lambda/${var.project_name}-db-setup"
+  retention_in_days = 14
+
+  tags = {
+    Name = "${var.project_name}-lambda-db-setup-logs"
+  }
+}
+
 # ==========================================
-# FUNÇÃO LAMBDA
+# FUNÇÃO LAMBDA DE SETUP DO BANCO
+# ==========================================
+
+data "archive_file" "lambda_db_setup" {
+  type        = "zip"
+  output_path = "${path.module}/lambda-db-setup.zip"
+  source {
+    content = <<EOF
+import json
+import pymysql
+import boto3
+import logging
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def lambda_handler(event, context):
+    try:
+        logger.info("🗄️ Iniciando setup do banco Mana Food...")
+        
+        # Obter credenciais do Aurora
+        rds_client = boto3.client('rds')
+        secrets_client = boto3.client('secretsmanager')
+        
+        # Buscar informações do cluster
+        cluster_info = rds_client.describe_db_clusters(DBClusterIdentifier='mana-food-aurora')
+        cluster = cluster_info['DBClusters'][0]
+        
+        endpoint = cluster['Endpoint']
+        port = cluster['Port']
+        
+        # Obter credenciais
+        if 'MasterUserSecret' in cluster and cluster['MasterUserSecret']:
+            secret_arn = cluster['MasterUserSecret']['SecretArn']
+            secret_response = secrets_client.get_secret_value(SecretId=secret_arn)
+            secret_data = json.loads(secret_response['SecretString'])
+            username = secret_data['username']
+            password = secret_data['password']
+        else:
+            username = 'admin'
+            password = event.get('password', 'TempPassword123!')
+        
+        logger.info(f"Conectando ao Aurora: {endpoint}:{port}")
+        
+        # Conectar ao MySQL
+        connection = pymysql.connect(
+            host=endpoint,
+            port=port,
+            user=username,
+            password=password,
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor,
+            connect_timeout=60,
+            read_timeout=60,
+            write_timeout=60
+        )
+        
+        with connection.cursor() as cursor:
+            logger.info("✅ Conexão estabelecida!")
+            
+            # Criar database
+            cursor.execute("CREATE DATABASE IF NOT EXISTS manafooddb")
+            cursor.execute("USE manafooddb")
+            
+            # Tabela de usuários
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                    cpf VARCHAR(11) NOT NULL UNIQUE,
+                    name VARCHAR(255) NOT NULL,
+                    email VARCHAR(255),
+                    phone VARCHAR(20),
+                    user_type ENUM('cliente', 'admin', 'gerente') DEFAULT 'cliente',
+                    password_hash VARCHAR(255),
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    
+                    INDEX idx_cpf (cpf),
+                    INDEX idx_email (email),
+                    INDEX idx_user_type (user_type),
+                    INDEX idx_active (is_active)
+                )
+            """)
+            
+            # Inserir dados de teste
+            users_data = [
+                ('12345678901', 'Cliente Teste Mana Food', 'cliente@test.com', 'cliente'),
+                ('98765432100', 'Admin Sistema Mana Food', 'admin@manafood.com', 'admin'),
+                ('11111111111', 'Gerente Mana Food', 'gerente@manafood.com', 'gerente')
+            ]
+            
+            for cpf, name, email, user_type in users_data:
+                cursor.execute("""
+                    INSERT IGNORE INTO users (id, cpf, name, email, user_type, is_active) 
+                    VALUES (UUID(), %s, %s, %s, %s, TRUE)
+                """, (cpf, name, email, user_type))
+            
+            connection.commit()
+            
+            # Verificar dados inseridos
+            cursor.execute("SELECT COUNT(*) as count FROM users")
+            users_count = cursor.fetchone()['count']
+            
+            logger.info(f"✅ Setup concluído! Usuários: {users_count}")
+            
+            return {
+                'statusCode': 200,
+                'body': json.dumps({
+                    'message': 'Banco Mana Food configurado com sucesso!',
+                    'users_count': users_count,
+                    'endpoint': endpoint
+                })
+            }
+            
+    except Exception as e:
+        logger.error(f"❌ Erro no setup: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': str(e),
+                'message': 'Falha no setup do banco'
+            })
+        }
+    finally:
+        if 'connection' in locals():
+            connection.close()
+EOF
+    filename = "lambda_function.py"
+  }
+}
+
+resource "aws_lambda_function" "db_setup" {
+  function_name = "${var.project_name}-db-setup"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.12"
+  timeout       = 300
+  memory_size   = 256
+
+  filename         = data.archive_file.lambda_db_setup.output_path
+  source_code_hash = data.archive_file.lambda_db_setup.output_base64sha256
+
+  vpc_config {
+    subnet_ids         = module.vpc.private_subnets
+    security_group_ids = [aws_security_group.lambda.id]
+  }
+
+  environment {
+    variables = {
+      AURORA_ENDPOINT = module.aurora.cluster_endpoint
+      AURORA_PORT     = "3306"
+      DATABASE_NAME   = "manafooddb"
+    }
+  }
+
+  # Usar layer público do PyMySQL
+  layers = ["arn:aws:lambda:sa-east-1:336392948345:layer:AWSSDKPandas-Python312:8"]
+
+  tags = {
+    Name = "${var.project_name}-db-setup-lambda"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_basic,
+    aws_iam_role_policy_attachment.lambda_vpc,
+    aws_cloudwatch_log_group.lambda_db_setup_logs
+  ]
+}
+
+# ==========================================
+# FUNÇÃO LAMBDA PRINCIPAL (.NET 9)
 # ==========================================
 
 resource "aws_lambda_function" "api" {
@@ -111,8 +291,8 @@ resource "aws_lambda_function" "api" {
   memory_size   = 512
 
   # Usar o arquivo ZIP da build ou dummy se não existir
-  filename         = fileexists("lambda-deployment.zip") ? "lambda-deployment.zip" : "${path.module}/lambda-dummy.zip"
-  source_code_hash = fileexists("lambda-deployment.zip") ? filebase64sha256("lambda-deployment.zip") : filebase64sha256("${path.module}/lambda-dummy.zip")
+  filename         = fileexists("lambda-deployment.zip") ? "lambda-deployment.zip" : data.archive_file.lambda_dummy.output_path
+  source_code_hash = fileexists("lambda-deployment.zip") ? filebase64sha256("lambda-deployment.zip") : data.archive_file.lambda_dummy.output_base64sha256
 
   vpc_config {
     subnet_ids         = module.vpc.private_subnets
@@ -123,9 +303,9 @@ resource "aws_lambda_function" "api" {
     variables = {
       AURORA_ENDPOINT        = module.aurora.cluster_endpoint
       AURORA_PORT           = "3306"
-      DATABASE_NAME         = "appdb"
+      DATABASE_NAME         = "manafooddb"
       ASPNETCORE_ENVIRONMENT = "Production"
-      AWS_REGION            = var.aws_region
+      # ❌ REMOVIDO AWS_REGION (variável reservada)
     }
   }
 
@@ -136,7 +316,8 @@ resource "aws_lambda_function" "api" {
   depends_on = [
     aws_iam_role_policy_attachment.lambda_basic,
     aws_iam_role_policy_attachment.lambda_vpc,
-    aws_cloudwatch_log_group.lambda_logs
+    aws_cloudwatch_log_group.lambda_logs,
+    aws_lambda_function.db_setup  # Garantir que o setup do DB rode primeiro
   ]
 }
 
@@ -201,8 +382,6 @@ resource "aws_lambda_permission" "api_gateway_invoke" {
   source_arn    = "${aws_api_gateway_rest_api.lambda_api.execution_arn}/*/*"
 }
 
-# Substituir o bloco aws_api_gateway_deployment por:
-
 resource "aws_api_gateway_deployment" "lambda_deployment" {
   depends_on = [
     aws_api_gateway_integration.lambda_integration
@@ -215,7 +394,6 @@ resource "aws_api_gateway_deployment" "lambda_deployment" {
   }
 }
 
-# Criar um stage separado
 resource "aws_api_gateway_stage" "lambda_stage" {
   deployment_id = aws_api_gateway_deployment.lambda_deployment.id
   rest_api_id   = aws_api_gateway_rest_api.lambda_api.id
