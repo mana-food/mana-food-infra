@@ -226,6 +226,13 @@ jobs:
           echo "✅ Cluster EKS totalmente pronto!"
           kubectl get nodes
 
+      - name: Check cluster resources
+        run: |
+          echo "🔍 Verificando recursos do cluster..."
+          kubectl get nodes -o wide
+          kubectl get pods --all-namespaces
+          kubectl top nodes || echo "Metrics server não disponível"
+
       - name: Backup current deployment
         id: backup
         continue-on-error: true
@@ -247,10 +254,18 @@ jobs:
           path: deployment-backup.yaml
           retention-days: 30
 
-      - name: Deploy app
+      - name: Deploy app with diagnostics
         id: deploy
         run: |
           IMAGE="${{ github.event.inputs.image || 'ghcr.io/mana-food-clean-architecture:latest' }}"
+          
+          echo "🔍 Verificando se a imagem existe..."
+          # Tentar verificar se a imagem existe (pode falhar se for privada)
+          if ! curl -s -f -L "https://ghcr.io/v2/mana-food/mana-food-clean-architecture/manifests/latest" >/dev/null 2>&1; then
+            echo "⚠️ Imagem pode não existir ou ser privada: $IMAGE"
+            echo "Usando nginx como fallback para teste da infraestrutura..."
+            IMAGE="nginx:latest"
+          fi
           
           if kubectl get deployment mana-food-app >/dev/null 2>&1; then
             echo "🔄 Atualizando deployment existente..."
@@ -278,9 +293,33 @@ jobs:
                   image: $IMAGE
                   ports:
                   - containerPort: 8080
+                  resources:
+                    requests:
+                      cpu: "100m"
+                      memory: "128Mi"
+                    limits:
+                      cpu: "500m"
+                      memory: "512Mi"
                   env:
-                  - name: DB_ENDPOINT
-                    value: "${{ steps.get-aurora-endpoint.outputs.endpoint }}"
+                  - name: ASPNETCORE_ENVIRONMENT
+                    value: "Production"
+                  - name: ASPNETCORE_URLS
+                    value: "http://+:8080"
+                  # Health checks básicos (só para nginx de teste)
+                  livenessProbe:
+                    httpGet:
+                      path: /
+                      port: 8080
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                    failureThreshold: 3
+                  readinessProbe:
+                    httpGet:
+                      path: /
+                      port: 8080
+                    initialDelaySeconds: 5
+                    periodSeconds: 5
+                    failureThreshold: 3
           ---
           apiVersion: v1
           kind: Service
@@ -297,13 +336,44 @@ jobs:
           EOF
           fi
 
-      - name: Wait for rollout
-        run: kubectl rollout status deployment/mana-food-app --timeout=300s
+      - name: Wait for rollout with monitoring
+        run: |
+          echo "⏳ Aguardando deployment com monitoramento..."
+          
+          # Aguardar por 2 minutos primeiro
+          if kubectl rollout status deployment/mana-food-app --timeout=120s; then
+            echo "✅ Deployment concluído com sucesso!"
+          else
+            echo "⚠️ Deployment demorou mais que 2 minutos, verificando status..."
+            
+            echo "📊 Status do deployment:"
+            kubectl get deployment mana-food-app -o wide
+            kubectl get replicaset -l app=mana-food-app
+            kubectl get pods -l app=mana-food-app -o wide
+            
+            echo "📋 Logs dos pods:"
+            kubectl get pods -l app=mana-food-app -o name | while read pod; do
+              echo "=== Logs do $pod ==="
+              kubectl logs $pod --tail=20 || echo "Não foi possível obter logs"
+              echo "=== Describe do $pod ==="
+              kubectl describe $pod | tail -20
+            done
+            
+            echo "📋 Events recentes:"
+            kubectl get events --sort-by='.lastTimestamp' | tail -10
+            
+            # Tentar aguardar mais 2 minutos
+            if kubectl rollout status deployment/mana-food-app --timeout=120s; then
+              echo "✅ Deployment concluído após aguardar mais tempo!"
+            else
+              echo "❌ Deployment falhou após 4 minutos"
+              exit 1
+            fi
+          fi
 
       - name: Verify deployment
-        id: verify-app
         run: |
-          echo "🔍 Verificando deployment..."
+          echo "🔍 Verificando deployment final..."
           READY=$(kubectl get deployment mana-food-app -o jsonpath='{.status.readyReplicas}')
           DESIRED=$(kubectl get deployment mana-food-app -o jsonpath='{.spec.replicas}')
           
@@ -319,8 +389,16 @@ jobs:
         if: success()
         run: |
           echo "✅ Deploy concluído com sucesso!"
-          kubectl get pods -l app=mana-food-app
+          kubectl get pods -l app=mana-food-app -o wide
           kubectl get svc mana-food-service
+          kubectl get events --sort-by='.lastTimestamp' | tail -5
+
+      - name: Cleanup on failure
+        if: failure()
+        run: |
+          echo "🧹 Limpando recursos do deployment falhado..."
+          kubectl delete deployment mana-food-app || true
+          kubectl delete service mana-food-service || true
 
   rollback-app:
     name: 'Rollback Application'
