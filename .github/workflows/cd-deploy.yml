@@ -208,11 +208,21 @@ jobs:
           # Obter Security Group do Aurora
           AURORA_SG=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].VpcSecurityGroups[0].VpcSecurityGroupId' --output text)
           
-          # Obter CIDR da VPC para permitir acesso interno
+          # Obter CIDR da VPC
+          VPC_ID=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].DBSubnetGroup' --output text)
           VPC_CIDR=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=mana-food-vpc" --query 'Vpcs[0].CidrBlock' --output text --region sa-east-1)
           
           echo "Aurora SG: $AURORA_SG"
           echo "VPC CIDR: $VPC_CIDR"
+          
+          # Remover regras antigas se existirem
+          echo "🧹 Limpando regras antigas..."
+          aws ec2 revoke-security-group-ingress \
+            --group-id "$AURORA_SG" \
+            --protocol tcp \
+            --port 3306 \
+            --cidr 0.0.0.0/0 \
+            --region sa-east-1 2>/dev/null || echo "Regra 0.0.0.0/0 não existia"
           
           # Permitir acesso da VPC (Lambda e EKS)
           aws ec2 authorize-security-group-ingress \
@@ -229,21 +239,22 @@ jobs:
             --port 3306 \
             --cidr 0.0.0.0/0 \
             --region sa-east-1 || echo "Regra externa já existe"
+          
+          echo "⏳ Aguardando propagação das regras de Security Group..."
+          sleep 120
 
-      - name: Wait for Aurora and setup database
+      - name: Wait for Aurora availability
         run: |
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
-          DB_USERNAME="${{ steps.credentials.outputs.username }}"
-          DB_PASSWORD="${{ steps.credentials.outputs.password }}"
           
           echo "⏳ Aguardando Aurora estar disponível..."
           
           # Aguardar Aurora estar available
-          timeout 300 bash -c "
+          timeout 600 bash -c "
             while true; do
               STATUS=\$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].Status' --output text 2>/dev/null || echo 'unknown')
               if [ \"\$STATUS\" = \"available\" ]; then
-                echo \"✅ Aurora disponível!\"
+                echo \"✅ Aurora disponível pelo AWS CLI!\"
                 break
               fi
               echo \"Status: \$STATUS - aguardando...\"
@@ -251,119 +262,169 @@ jobs:
             done
           "
           
+          echo "🔗 Testando conectividade TCP..."
+          
+          # Testar conectividade TCP antes de tentar conectar com MySQL
+          timeout 120 bash -c "
+            while true; do
+              if timeout 10 bash -c 'echo > /dev/tcp/$AURORA_ENDPOINT/3306' 2>/dev/null; then
+                echo \"✅ Conectividade TCP estabelecida!\"
+                break
+              fi
+              echo \"⏳ Aguardando conectividade TCP...\"
+              sleep 15
+            done
+          " || echo "⚠️ Timeout na conectividade TCP, mas continuando..."
+
+      - name: Setup database with retries
+        run: |
+          AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
+          DB_USERNAME="${{ steps.credentials.outputs.username }}"
+          DB_PASSWORD="${{ steps.credentials.outputs.password }}"
+          
           echo "🗄️ Configurando banco de dados Mana Food..."
           
-          # Setup inicial do banco
-          timeout 180 docker run --rm --network host mysql:8.0 mysql \
-            -h "$AURORA_ENDPOINT" \
-            -u "$DB_USERNAME" \
-            -p"$DB_PASSWORD" \
-            --connect-timeout=30 \
-            -e "
-            -- Criar database principal
-            CREATE DATABASE IF NOT EXISTS manafooddb;
-            USE manafooddb;
+          # Tentar setup com várias tentativas
+          for attempt in {1..5}; do
+            echo "🔄 Tentativa $attempt de 5..."
             
-            -- Tabela de usuários para autenticação
-            CREATE TABLE IF NOT EXISTS users (
-                id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-                cpf VARCHAR(11) NOT NULL UNIQUE,
-                name VARCHAR(255) NOT NULL,
-                email VARCHAR(255),
-                phone VARCHAR(20),
-                user_type ENUM('cliente', 'admin', 'gerente') DEFAULT 'cliente',
-                password_hash VARCHAR(255),
-                is_active BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            if timeout 240 docker run --rm --network host mysql:8.0 mysql \
+              -h "$AURORA_ENDPOINT" \
+              -u "$DB_USERNAME" \
+              -p"$DB_PASSWORD" \
+              --connect-timeout=60 \
+              -e "
+              -- Verificar conexão
+              SELECT 'Conexão estabelecida!' as status;
+              
+              -- Criar database principal
+              CREATE DATABASE IF NOT EXISTS manafooddb;
+              USE manafooddb;
+              
+              -- Tabela de usuários para autenticação
+              CREATE TABLE IF NOT EXISTS users (
+                  id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                  cpf VARCHAR(11) NOT NULL UNIQUE,
+                  name VARCHAR(255) NOT NULL,
+                  email VARCHAR(255),
+                  phone VARCHAR(20),
+                  user_type ENUM('cliente', 'admin', 'gerente') DEFAULT 'cliente',
+                  password_hash VARCHAR(255),
+                  is_active BOOLEAN DEFAULT TRUE,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  
+                  INDEX idx_cpf (cpf),
+                  INDEX idx_email (email),
+                  INDEX idx_user_type (user_type),
+                  INDEX idx_active (is_active)
+              );
+              
+              -- Tabela de produtos
+              CREATE TABLE IF NOT EXISTS products (
+                  id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                  name VARCHAR(255) NOT NULL,
+                  description TEXT,
+                  price DECIMAL(10,2) NOT NULL,
+                  category ENUM('lanche', 'acompanhamento', 'bebida', 'sobremesa') NOT NULL,
+                  image_url VARCHAR(500),
+                  is_available BOOLEAN DEFAULT TRUE,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  
+                  INDEX idx_category (category),
+                  INDEX idx_available (is_available)
+              );
+              
+              -- Tabela de pedidos
+              CREATE TABLE IF NOT EXISTS orders (
+                  id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                  user_id CHAR(36),
+                  total_amount DECIMAL(10,2) NOT NULL,
+                  status ENUM('recebido', 'preparacao', 'pronto', 'entregue', 'cancelado') DEFAULT 'recebido',
+                  payment_status ENUM('pendente', 'pago', 'cancelado') DEFAULT 'pendente',
+                  notes TEXT,
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                  
+                  FOREIGN KEY (user_id) REFERENCES users(id),
+                  INDEX idx_user (user_id),
+                  INDEX idx_status (status),
+                  INDEX idx_payment (payment_status),
+                  INDEX idx_created (created_at)
+              );
+              
+              -- Tabela de itens do pedido
+              CREATE TABLE IF NOT EXISTS order_items (
+                  id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                  order_id CHAR(36) NOT NULL,
+                  product_id CHAR(36) NOT NULL,
+                  quantity INT NOT NULL DEFAULT 1,
+                  unit_price DECIMAL(10,2) NOT NULL,
+                  total_price DECIMAL(10,2) NOT NULL,
+                  notes TEXT,
+                  
+                  FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
+                  FOREIGN KEY (product_id) REFERENCES products(id),
+                  INDEX idx_order (order_id),
+                  INDEX idx_product (product_id)
+              );
+              
+              -- Inserir dados de teste
+              INSERT IGNORE INTO users (id, cpf, name, email, user_type, is_active) VALUES 
+              (UUID(), '12345678901', 'Cliente Teste Mana Food', 'cliente@test.com', 'cliente', TRUE),
+              (UUID(), '98765432100', 'Admin Sistema Mana Food', 'admin@manafood.com', 'admin', TRUE),
+              (UUID(), '11111111111', 'Gerente Mana Food', 'gerente@manafood.com', 'gerente', TRUE),
+              (UUID(), '22222222222', 'João Silva', 'joao@test.com', 'cliente', TRUE),
+              (UUID(), '33333333333', 'Maria Santos', 'maria@test.com', 'cliente', TRUE);
+              
+              -- Inserir produtos de exemplo
+              INSERT IGNORE INTO products (id, name, description, price, category, is_available) VALUES 
+              (UUID(), 'X-Burger Clássico', 'Hambúrguer com carne, queijo, alface e tomate', 25.90, 'lanche', TRUE),
+              (UUID(), 'X-Bacon', 'Hambúrguer com bacon, carne, queijo e molho especial', 29.90, 'lanche', TRUE),
+              (UUID(), 'Batata Frita', 'Porção de batata frita crocante', 12.90, 'acompanhamento', TRUE),
+              (UUID(), 'Refrigerante Lata', 'Refrigerante gelado 350ml', 5.90, 'bebida', TRUE),
+              (UUID(), 'Milkshake', 'Milkshake cremoso sabores variados', 15.90, 'sobremesa', TRUE);
+              
+              -- Mostrar estatísticas
+              SELECT 
+                  'users' as tabela,
+                  COUNT(*) as total_registros
+              FROM users
+              UNION ALL
+              SELECT 
+                  'products' as tabela,
+                  COUNT(*) as total_registros
+              FROM products;
+              
+              SELECT 'Banco Mana Food configurado com sucesso!' as status;
+              "; then
+              echo "✅ Banco de dados configurado com sucesso na tentativa $attempt!"
+              break
+            else
+              echo "❌ Falha na tentativa $attempt"
+              
+              if [ $attempt -eq 5 ]; then
+                echo "💥 Falha após 5 tentativas"
                 
-                INDEX idx_cpf (cpf),
-                INDEX idx_email (email),
-                INDEX idx_user_type (user_type),
-                INDEX idx_active (is_active)
-            );
-            
-            -- Tabela de produtos
-            CREATE TABLE IF NOT EXISTS products (
-                id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-                name VARCHAR(255) NOT NULL,
-                description TEXT,
-                price DECIMAL(10,2) NOT NULL,
-                category ENUM('lanche', 'acompanhamento', 'bebida', 'sobremesa') NOT NULL,
-                image_url VARCHAR(500),
-                is_available BOOLEAN DEFAULT TRUE,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                # Diagnóstico final
+                echo "🔍 Diagnóstico final..."
+                echo "1. Status do Aurora:"
+                aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].Status' --output text
                 
-                INDEX idx_category (category),
-                INDEX idx_available (is_available)
-            );
-            
-            -- Tabela de pedidos
-            CREATE TABLE IF NOT EXISTS orders (
-                id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-                user_id CHAR(36),
-                total_amount DECIMAL(10,2) NOT NULL,
-                status ENUM('recebido', 'preparacao', 'pronto', 'entregue', 'cancelado') DEFAULT 'recebido',
-                payment_status ENUM('pendente', 'pago', 'cancelado') DEFAULT 'pendente',
-                notes TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                echo "2. Security Groups do Aurora:"
+                aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].VpcSecurityGroups'
                 
-                FOREIGN KEY (user_id) REFERENCES users(id),
-                INDEX idx_user (user_id),
-                INDEX idx_status (status),
-                INDEX idx_payment (payment_status),
-                INDEX idx_created (created_at)
-            );
-            
-            -- Tabela de itens do pedido
-            CREATE TABLE IF NOT EXISTS order_items (
-                id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-                order_id CHAR(36) NOT NULL,
-                product_id CHAR(36) NOT NULL,
-                quantity INT NOT NULL DEFAULT 1,
-                unit_price DECIMAL(10,2) NOT NULL,
-                total_price DECIMAL(10,2) NOT NULL,
-                notes TEXT,
+                echo "3. Teste de conectividade básica:"
+                timeout 10 bash -c "echo > /dev/tcp/$AURORA_ENDPOINT/3306" && echo "TCP OK" || echo "TCP FALHOU"
                 
-                FOREIGN KEY (order_id) REFERENCES orders(id) ON DELETE CASCADE,
-                FOREIGN KEY (product_id) REFERENCES products(id),
-                INDEX idx_order (order_id),
-                INDEX idx_product (product_id)
-            );
-            
-            -- Inserir dados de teste
-            INSERT IGNORE INTO users (id, cpf, name, email, user_type, is_active) VALUES 
-            (UUID(), '12345678901', 'Cliente Teste Mana Food', 'cliente@test.com', 'cliente', TRUE),
-            (UUID(), '98765432100', 'Admin Sistema Mana Food', 'admin@manafood.com', 'admin', TRUE),
-            (UUID(), '11111111111', 'Gerente Mana Food', 'gerente@manafood.com', 'gerente', TRUE),
-            (UUID(), '22222222222', 'João Silva', 'joao@test.com', 'cliente', TRUE),
-            (UUID(), '33333333333', 'Maria Santos', 'maria@test.com', 'cliente', TRUE);
-            
-            -- Inserir produtos de exemplo
-            INSERT IGNORE INTO products (id, name, description, price, category, is_available) VALUES 
-            (UUID(), 'X-Burger Clássico', 'Hambúrguer com carne, queijo, alface e tomate', 25.90, 'lanche', TRUE),
-            (UUID(), 'X-Bacon', 'Hambúrguer com bacon, carne, queijo e molho especial', 29.90, 'lanche', TRUE),
-            (UUID(), 'Batata Frita', 'Porção de batata frita crocante', 12.90, 'acompanhamento', TRUE),
-            (UUID(), 'Refrigerante Lata', 'Refrigerante gelado 350ml', 5.90, 'bebida', TRUE),
-            (UUID(), 'Milkshake', 'Milkshake cremoso sabores variados', 15.90, 'sobremesa', TRUE);
-            
-            -- Mostrar estatísticas
-            SELECT 
-                'users' as tabela,
-                COUNT(*) as total_registros
-            FROM users
-            UNION ALL
-            SELECT 
-                'products' as tabela,
-                COUNT(*) as total_registros
-            FROM products;
-            
-            SELECT 'Banco Mana Food configurado com sucesso!' as status;
-            "
-          
-          echo "✅ Banco de dados Mana Food configurado!"
+                exit 1
+              fi
+              
+              echo "⏳ Aguardando 60s antes da próxima tentativa..."
+              sleep 60
+            fi
+          done
 
   configure-lambda:
     name: 'Config Lambda com RDS'
