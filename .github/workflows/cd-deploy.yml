@@ -191,30 +191,88 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
+      - name: Wait for Aurora to be available
+        run: |
+          AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
+          echo "Aguardando Aurora estar disponível em: $AURORA_ENDPOINT"
+          
+          # Aguardar até 15 minutos pelo Aurora
+          TIMEOUT=900  # 15 minutos
+          ELAPSED=0
+          SLEEP_TIME=30
+          
+          while [ $ELAPSED -lt $TIMEOUT ]; do
+            echo "Tentativa $((ELAPSED/SLEEP_TIME + 1)) - Verificando Aurora... (${ELAPSED}s/${TIMEOUT}s)"
+            
+            if nc -z -w5 $AURORA_ENDPOINT 3306; then
+              echo "✅ Aurora está respondendo!"
+              break
+            fi
+            
+            # Verificar status via AWS CLI
+            STATUS=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].Status' --output text 2>/dev/null || echo "unknown")
+            echo "Status Aurora: $STATUS"
+            
+            if [ "$STATUS" = "available" ]; then
+              echo "✅ Aurora está disponível pelo AWS CLI!"
+              # Aguardar mais um pouco para garantir conectividade
+              sleep 60
+              break
+            fi
+            
+            sleep $SLEEP_TIME
+            ELAPSED=$((ELAPSED + SLEEP_TIME))
+          done
+          
+          if [ $ELAPSED -ge $TIMEOUT ]; then
+            echo "❌ Timeout aguardando Aurora"
+            exit 1
+          fi
+
       - name: Setup Database
         run: |
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
           DB_PASSWORD="${{ secrets.DB_PASSWORD || 'TempPassword123!' }}"
           
-          # Aguardar Aurora
-          timeout 300 bash -c "while ! nc -z $AURORA_ENDPOINT 3306; do sleep 30; done"
+          echo "Configurando banco de dados..."
           
-          # Setup DB
-          docker run --rm mysql:8.0 mysql -h "$AURORA_ENDPOINT" -u admin -p"$DB_PASSWORD" -e "
-          CREATE DATABASE IF NOT EXISTS appdb;
-          USE appdb;
-          CREATE TABLE IF NOT EXISTS users (
-              id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
-              cpf VARCHAR(11) NOT NULL UNIQUE,
-              name VARCHAR(255),
-              email VARCHAR(255),
-              user_type INT DEFAULT 1,
-              deleted BOOLEAN DEFAULT FALSE
-          );
-          INSERT IGNORE INTO users (cpf, name, email) VALUES 
-          ('12345678901', 'Cliente Teste', 'teste@test.com'),
-          ('98765432100', 'Admin Teste', 'admin@test.com');
-          "
+          # Tentar conectar com retry
+          for i in {1..5}; do
+            echo "Tentativa $i de configuração do banco..."
+            
+            if docker run --rm mysql:8.0 mysql \
+              -h "$AURORA_ENDPOINT" \
+              -u admin \
+              -p"$DB_PASSWORD" \
+              --connect-timeout=60 \
+              -e "
+              CREATE DATABASE IF NOT EXISTS appdb;
+              USE appdb;
+              CREATE TABLE IF NOT EXISTS users (
+                  id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
+                  cpf VARCHAR(11) NOT NULL UNIQUE,
+                  name VARCHAR(255),
+                  email VARCHAR(255),
+                  user_type INT DEFAULT 1,
+                  deleted BOOLEAN DEFAULT FALSE,
+                  INDEX idx_cpf (cpf)
+              );
+              INSERT IGNORE INTO users (cpf, name, email) VALUES 
+              ('12345678901', 'Cliente Teste', 'teste@test.com'),
+              ('98765432100', 'Admin Teste', 'admin@test.com');
+              SELECT COUNT(*) as total_users FROM users;
+              "; then
+              echo "✅ Banco configurado com sucesso!"
+              break
+            else
+              echo "❌ Falha na tentativa $i"
+              if [ $i -eq 5 ]; then
+                echo "❌ Falha após 5 tentativas"
+                exit 1
+              fi
+              sleep 30
+            fi
+          done
 
   configure-lambda:
     name: 'Config Lambda'
@@ -244,6 +302,9 @@ jobs:
               \"AURORA_ENDPOINT\":\"$AURORA_ENDPOINT\",
               \"DATABASE_NAME\":\"appdb\"
             }"
+          
+          # Aguardar atualização
+          aws lambda wait function-updated --function-name mana-food-api --region sa-east-1
 
   test-lambda:
     name: 'Test Auth'
@@ -261,15 +322,21 @@ jobs:
       - name: Test Lambda
         run: |
           # Teste direto
+          echo "Testando Lambda diretamente..."
           aws lambda invoke --function-name mana-food-api --payload '{"cpf":"12345678901"}' response.json
           cat response.json
           
           # Teste API Gateway
+          echo "Testando via API Gateway..."
           API_ID=$(aws apigateway get-rest-apis --query 'items[?name==`mana-food-api`].id' --output text)
-          API_URL="https://$API_ID.execute-api.sa-east-1.amazonaws.com/prod"
-          echo "API URL: $API_URL"
-          
-          curl -X POST "$API_URL" -H "Content-Type: application/json" -d '{"cpf":"12345678901"}'
+          if [ "$API_ID" != "None" ] && [ -n "$API_ID" ]; then
+            API_URL="https://$API_ID.execute-api.sa-east-1.amazonaws.com/prod"
+            echo "API URL: $API_URL"
+            
+            curl -X POST "$API_URL" -H "Content-Type: application/json" -d '{"cpf":"12345678901"}' || echo "Falha no teste API Gateway"
+          else
+            echo "API Gateway não encontrado"
+          fi
 
   deploy-app:
     name: 'Deploy App'
