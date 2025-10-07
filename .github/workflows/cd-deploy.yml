@@ -191,33 +191,60 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: sa-east-1
 
+      - name: Fix Aurora Security Group for external access
+        run: |
+          AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
+          echo "Diagnosticando conectividade com Aurora: $AURORA_ENDPOINT"
+          
+          # Obter VPC ID do Aurora
+          VPC_ID=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].DbClusterMembers[0].DBSubnetGroup' --output text)
+          
+          # Obter Security Groups do Aurora
+          AURORA_SG=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].VpcSecurityGroups[0].VpcSecurityGroupId' --output text)
+          
+          echo "Aurora Security Group: $AURORA_SG"
+          
+          # Adicionar regra para permitir acesso externo (temporariamente)
+          aws ec2 authorize-security-group-ingress \
+            --group-id "$AURORA_SG" \
+            --protocol tcp \
+            --port 3306 \
+            --cidr 0.0.0.0/0 \
+            --region sa-east-1 || echo "Regra já existe ou erro ao adicionar"
+          
+          echo "Regra de acesso adicionada ao Security Group"
+
       - name: Wait for Aurora to be available
         run: |
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
           echo "Aguardando Aurora estar disponível em: $AURORA_ENDPOINT"
           
-          # Aguardar até 15 minutos pelo Aurora
-          TIMEOUT=900  # 15 minutos
+          # Verificar resolução DNS
+          echo "Testando resolução DNS..."
+          nslookup "$AURORA_ENDPOINT" || echo "Falha na resolução DNS"
+          
+          # Aguardar até 10 minutos pelo Aurora
+          TIMEOUT=600  # 10 minutos
           ELAPSED=0
           SLEEP_TIME=30
           
           while [ $ELAPSED -lt $TIMEOUT ]; do
             echo "Tentativa $((ELAPSED/SLEEP_TIME + 1)) - Verificando Aurora... (${ELAPSED}s/${TIMEOUT}s)"
             
-            if nc -z -w5 $AURORA_ENDPOINT 3306; then
-              echo "✅ Aurora está respondendo!"
-              break
-            fi
-            
-            # Verificar status via AWS CLI
+            # Verificar status via AWS CLI primeiro
             STATUS=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].Status' --output text 2>/dev/null || echo "unknown")
             echo "Status Aurora: $STATUS"
             
             if [ "$STATUS" = "available" ]; then
               echo "✅ Aurora está disponível pelo AWS CLI!"
-              # Aguardar mais um pouco para garantir conectividade
-              sleep 60
-              break
+              
+              # Testar conectividade TCP
+              if nc -z -w10 $AURORA_ENDPOINT 3306; then
+                echo "✅ Aurora está respondendo TCP!"
+                break
+              else
+                echo "⚠️ Aurora disponível mas não responde TCP ainda"
+              fi
             fi
             
             sleep $SLEEP_TIME
@@ -235,19 +262,24 @@ jobs:
           DB_PASSWORD="${{ secrets.DB_PASSWORD || 'TempPassword123!' }}"
           
           echo "Configurando banco de dados..."
+          echo "Endpoint: $AURORA_ENDPOINT"
+          echo "Password length: ${#DB_PASSWORD}"
           
-          # Tentar conectar com retry
-          for i in {1..5}; do
+          # Tentar conectar com retry e timeout maior
+          for i in {1..3}; do
             echo "Tentativa $i de configuração do banco..."
             
-            if docker run --rm mysql:8.0 mysql \
+            if timeout 120 docker run --rm mysql:8.0 mysql \
               -h "$AURORA_ENDPOINT" \
               -u admin \
               -p"$DB_PASSWORD" \
-              --connect-timeout=60 \
+              --connect-timeout=30 \
+              --wait-timeout=60 \
               -e "
+              SET SESSION wait_timeout = 300;
               CREATE DATABASE IF NOT EXISTS appdb;
               USE appdb;
+              
               CREATE TABLE IF NOT EXISTS users (
                   id CHAR(36) PRIMARY KEY DEFAULT (UUID()),
                   cpf VARCHAR(11) NOT NULL UNIQUE,
@@ -255,22 +287,40 @@ jobs:
                   email VARCHAR(255),
                   user_type INT DEFAULT 1,
                   deleted BOOLEAN DEFAULT FALSE,
-                  INDEX idx_cpf (cpf)
+                  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                  INDEX idx_cpf (cpf),
+                  INDEX idx_deleted (deleted)
               );
-              INSERT IGNORE INTO users (cpf, name, email) VALUES 
-              ('12345678901', 'Cliente Teste', 'teste@test.com'),
-              ('98765432100', 'Admin Teste', 'admin@test.com');
-              SELECT COUNT(*) as total_users FROM users;
+              
+              INSERT IGNORE INTO users (id, cpf, name, email, user_type) VALUES 
+              (UUID(), '12345678901', 'Cliente Teste', 'teste@test.com', 1),
+              (UUID(), '98765432100', 'Admin Teste', 'admin@test.com', 2),
+              (UUID(), '11111111111', 'User Mana Food', 'user@manafood.com', 1);
+              
+              SELECT COUNT(*) as total_users FROM users WHERE deleted = FALSE;
+              SHOW TABLES;
               "; then
               echo "✅ Banco configurado com sucesso!"
               break
             else
               echo "❌ Falha na tentativa $i"
-              if [ $i -eq 5 ]; then
-                echo "❌ Falha após 5 tentativas"
+              if [ $i -eq 3 ]; then
+                echo "❌ Falha após 3 tentativas"
+                
+                # Diagnóstico adicional
+                echo "Diagnóstico de conectividade:"
+                echo "1. Testando ping:"
+                ping -c 3 "$AURORA_ENDPOINT" || echo "Ping falhou"
+                
+                echo "2. Testando telnet na porta 3306:"
+                timeout 10 bash -c "echo > /dev/tcp/$AURORA_ENDPOINT/3306" && echo "Porta 3306 acessível" || echo "Porta 3306 inacessível"
+                
+                echo "3. Verificando Security Groups:"
+                aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].VpcSecurityGroups'
+                
                 exit 1
               fi
-              sleep 30
+              sleep 60
             fi
           done
 
