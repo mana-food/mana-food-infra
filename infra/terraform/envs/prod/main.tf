@@ -25,62 +25,25 @@ terraform {
   }
 }
 
-# IMPORTAR IAM User existente em vez de criar
-import {
-  to = aws_iam_user.manafood_terraform
-  id = "manafood-terraform"
+# ==========================================
+# IAM USER MANAGEMENT (se necessário)
+# ==========================================
+
+# Se o usuário já existe, use data source em vez de resource
+data "aws_iam_user" "existing_terraform_user" {
+  user_name = "manafood-terraform"
 }
 
-resource "aws_iam_user" "manafood_terraform" {
-  name = "manafood-terraform"
-}
-
+# Apenas anexar políticas se o usuário existir
 resource "aws_iam_user_policy_attachment" "administrator_access" {
-  user       = aws_iam_user.manafood_terraform.name
+  count      = length(data.aws_iam_user.existing_terraform_user.user_name) > 0 ? 1 : 0
+  user       = data.aws_iam_user.existing_terraform_user.user_name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
 }
 
-# EKS
-resource "aws_iam_user_policy_attachment" "eks_cluster" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = var.policy_eks_cluster
-}
-
-resource "aws_iam_user_policy_attachment" "eks_service" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = var.policy_eks_service
-}
-
-resource "aws_iam_user_policy_attachment" "eks_worker" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = var.policy_eks_worker
-}
-
-# VPC
-resource "aws_iam_user_policy_attachment" "vpc" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = var.policy_vpc
-}
-
-# RDS (Aurora MySQL)
-resource "aws_iam_user_policy_attachment" "rds" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = var.policy_rds
-}
-
-# Lambda
-resource "aws_iam_user_policy_attachment" "lambda" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = var.policy_lambda
-}
-
-# IAM - somente leitura
-resource "aws_iam_user_policy_attachment" "iam_readonly" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = var.policy_iam_readonly
-}
-
-resource "aws_iam_user_policy_attachment" "eks_worker_policy" {
-  user       = aws_iam_user.manafood_terraform.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-}
+# Ou, se preferir criar um novo usuário:
+# resource "aws_iam_user" "manafood_terraform" {
+#   name = "manafood-terraform"
+#   
+#   tags = local.common_tags
+# }
