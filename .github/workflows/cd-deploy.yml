@@ -161,22 +161,10 @@ jobs:
       - name: Rollback Infrastructure
         run: |
           echo "🔄 Iniciando rollback da infraestrutura..."
-          
-          # Listar recursos que podem ter falhado
-          terraform state list || echo "State pode estar corrompido"
-          
-          # Tentar destruir recursos críticos que podem ter falhado
-          echo "🗑️ Removendo recursos que falharam..."
           terraform destroy -target="aws_lambda_function.api" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
           terraform destroy -target="module.aurora" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
           terraform destroy -target="module.eks" -auto-approve -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" || true
-          
           echo "✅ Rollback da infraestrutura concluído"
-
-      - name: Notify Rollback
-        run: |
-          echo "🔄 Rollback da infraestrutura realizado!"
-          echo "Verifique os logs para mais detalhes."
 
   deploy-app:
     name: 'Deploy App'
@@ -198,20 +186,45 @@ jobs:
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
 
-      - name: Update kubeconfig
+      - name: Wait for cluster to be ready
         run: |
-          aws eks update-kubeconfig --region ${{ secrets.AWS_REGION }} --name mana-food-eks
-
-      - name: Wait for cluster
-        run: |
-          echo "⏳ Aguardando cluster EKS..."
-          timeout 300 bash -c '
-            while ! kubectl cluster-info >/dev/null 2>&1; do
-              echo "Aguardando cluster..."
+          echo "⏳ Aguardando cluster EKS ficar totalmente pronto..."
+          
+          # Aguardar até o cluster estar ACTIVE
+          timeout 600 bash -c '
+            while true; do
+              STATUS=$(aws eks describe-cluster --name mana-food-eks --region sa-east-1 --query "cluster.status" --output text)
+              echo "Status do cluster: $STATUS"
+              if [ "$STATUS" = "ACTIVE" ]; then
+                echo "✅ Cluster EKS está ACTIVE"
+                break
+              fi
               sleep 30
             done
           '
-          echo "✅ Cluster acessível!"
+          
+          # Configurar kubeconfig
+          aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks
+          
+          # Aguardar API server responder
+          timeout 300 bash -c '
+            while ! kubectl cluster-info >/dev/null 2>&1; do
+              echo "Aguardando API server..."
+              sleep 15
+            done
+          '
+          
+          # Aguardar nodes ficarem prontos
+          timeout 300 bash -c '
+            while [ $(kubectl get nodes --no-headers 2>/dev/null | grep -c Ready) -lt 1 ]; do
+              echo "Aguardando worker nodes..."
+              kubectl get nodes 2>/dev/null || true
+              sleep 15
+            done
+          '
+          
+          echo "✅ Cluster EKS totalmente pronto!"
+          kubectl get nodes
 
       - name: Backup current deployment
         id: backup
@@ -221,8 +234,6 @@ jobs:
             CURRENT_IMAGE=$(kubectl get deployment mana-food-app -o jsonpath='{.spec.template.spec.containers[0].image}')
             echo "previous-image=$CURRENT_IMAGE" >> $GITHUB_OUTPUT
             echo "📦 Backup da imagem atual: $CURRENT_IMAGE"
-            
-            # Salvar deployment completo
             kubectl get deployment mana-food-app -o yaml > deployment-backup.yaml
           else
             echo "⚠️ Deployment não existe - será criado"
@@ -267,6 +278,9 @@ jobs:
                   image: $IMAGE
                   ports:
                   - containerPort: 8080
+                  env:
+                  - name: DB_ENDPOINT
+                    value: "${{ steps.get-aurora-endpoint.outputs.endpoint }}"
           ---
           apiVersion: v1
           kind: Service
@@ -284,14 +298,12 @@ jobs:
           fi
 
       - name: Wait for rollout
-        run: |
-          kubectl rollout status deployment/mana-food-app --timeout=300s
+        run: kubectl rollout status deployment/mana-food-app --timeout=300s
 
       - name: Verify deployment
         id: verify-app
         run: |
           echo "🔍 Verificando deployment..."
-          
           READY=$(kubectl get deployment mana-food-app -o jsonpath='{.status.readyReplicas}')
           DESIRED=$(kubectl get deployment mana-food-app -o jsonpath='{.spec.replicas}')
           
@@ -334,51 +346,10 @@ jobs:
       - name: Rollback to previous version
         run: |
           PREVIOUS_IMAGE="${{ needs.deploy-app.outputs.previous-image }}"
-          
           echo "🔄 Fazendo rollback para: $PREVIOUS_IMAGE"
           kubectl set image deployment/mana-food-app app="$PREVIOUS_IMAGE"
-          
-          echo "⏳ Aguardando rollback..."
           kubectl rollout status deployment/mana-food-app --timeout=300s
-          
           echo "✅ Rollback concluído!"
-          kubectl get pods -l app=mana-food-app
-
-  cleanup-failed-resources:
-    name: 'Cleanup Failed Resources'
-    runs-on: ubuntu-latest
-    needs: [rollback-terraform, rollback-app]
-    if: failure()
-
-    steps:
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-
-      - name: Cleanup orphaned resources
-        run: |
-          echo "🧹 Limpando recursos órfãos..."
-          
-          # Verificar e limpar Load Balancers órfãos
-          echo "Verificando Load Balancers..."
-          aws elbv2 describe-load-balancers --query 'LoadBalancers[?contains(LoadBalancerName, `mana-food`)].LoadBalancerArn' --output text | while read lb_arn; do
-            if [ -n "$lb_arn" ]; then
-              echo "Removendo LB: $lb_arn"
-              aws elbv2 delete-load-balancer --load-balancer-arn "$lb_arn" || true
-            fi
-          done
-          
-          # Verificar Security Groups órfãos
-          echo "Verificando Security Groups..."
-          aws ec2 describe-security-groups --filters "Name=group-name,Values=*mana-food*" --query 'SecurityGroups[?GroupName!=`default`].GroupId' --output text | while read sg_id; do
-            if [ -n "$sg_id" ]; then
-              echo "Removendo SG: $sg_id"
-              aws ec2 delete-security-group --group-id "$sg_id" || true
-            fi
-          done
 
   notify-status:
     name: 'Notify Status'
