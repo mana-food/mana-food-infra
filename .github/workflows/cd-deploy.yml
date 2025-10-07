@@ -288,18 +288,33 @@ jobs:
           LAMBDA_FUNCTION_NAME="${{ needs.terraform-deploy.outputs.lambda-function-name }}"
           
           echo "🔧 Configurando Lambda .NET 9 com AWS Secrets Manager..."
+          echo "Secret ARN: $AURORA_SECRET_ARN"
           
-          # ✅ NOVA CONFIGURAÇÃO: Usar Secret ARN (sem connection string)
+          # ✅ CORREÇÃO FINAL: Usar arquivo JSON temporário para evitar problemas de escape
+          cat > /tmp/lambda-env.json << EOF
+          {
+            "AURORA_SECRET_ARN": "$AURORA_SECRET_ARN",
+            "ASPNETCORE_ENVIRONMENT": "Production",
+            "DATABASE_HOST": "$AURORA_ENDPOINT",
+            "DATABASE_NAME": "manafooddb",
+            "DATABASE_PORT": "3306"
+          }
+          EOF
+          
+          # Aplicar configuração usando arquivo
           aws lambda update-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --region sa-east-1 \
-            --environment Variables="{\"AURORA_SECRET_ARN\":\"$AURORA_SECRET_ARN\",\"ASPNETCORE_ENVIRONMENT\":\"Production\",\"DATABASE_HOST\":\"$AURORA_ENDPOINT\",\"DATABASE_NAME\":\"manafooddb\",\"DATABASE_PORT\":\"3306\"}"
+            --environment "Variables=$(cat /tmp/lambda-env.json | jq -c .)"
           
           # Aguardar atualização
           aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region sa-east-1
           
           echo "✅ Lambda .NET 9 configurada com AWS Secrets Manager"
           echo "🔐 Lambda obterá credenciais dinamicamente do secret: $AURORA_SECRET_ARN"
+          
+          # Limpar arquivo temporário
+          rm /tmp/lambda-env.json
 
   deploy-apps:
     name: 'Deploy Gateway & API .NET 9 no EKS'
