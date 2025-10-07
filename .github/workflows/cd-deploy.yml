@@ -176,30 +176,46 @@ jobs:
           
           # Verificar se IAM User já está no state
           if ! terraform state show aws_iam_user.manafood_terraform >/dev/null 2>&1; then
-            echo "📥 Importando IAM User..."
-            terraform import \
-              -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
-              aws_iam_user.manafood_terraform manafood-terraform || true
+            echo "📥 Verificando IAM User na AWS..."
+            if aws iam get-user --user-name manafood-terraform >/dev/null 2>&1; then
+              echo "📥 Importando IAM User..."
+              terraform import \
+                -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+                aws_iam_user.manafood_terraform manafood-terraform || true
+            else
+              echo "⚠️ IAM User nao encontrado na AWS - pulando import"
+            fi
           else
             echo "✅ IAM User já está no state"
           fi
           
           # Verificar KMS Alias
           if ! terraform state show 'module.eks.module.kms.aws_kms_alias.this["cluster"]' >/dev/null 2>&1; then
-            echo "📥 Importando KMS Alias..."
-            terraform import \
-              -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
-              'module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mana-food-eks || true
+            echo "📥 Verificando KMS Alias na AWS..."
+            if [ -n "$(aws kms list-aliases --region ${{ secrets.AWS_REGION }} --query 'Aliases[?AliasName==`alias/eks/mana-food-eks`].AliasName' --output text 2>/dev/null)" ]; then
+              echo "📥 Importando KMS Alias..."
+              terraform import \
+                -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+                'module.eks.module.kms.aws_kms_alias.this["cluster"]' alias/eks/mana-food-eks || true
+            else
+              echo "⚠️ KMS Alias nao encontrado na AWS - pulando import"
+            fi
           else
             echo "✅ KMS Alias já está no state"
           fi
           
           # Verificar CloudWatch Log Group
           if ! terraform state show 'module.eks.aws_cloudwatch_log_group.this[0]' >/dev/null 2>&1; then
-            echo "📥 Importando CloudWatch Log Group..."
-            terraform import \
-              -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
-              'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/mana-food-eks/cluster || true
+            echo "📥 Verificando CloudWatch Log Group na AWS..."
+            CW_EXISTS=$(aws logs describe-log-groups --log-group-name-prefix "/aws/eks/mana-food-eks/cluster" --region ${{ secrets.AWS_REGION }} --query 'logGroups[?logGroupName==`/aws/eks/mana-food-eks/cluster`].logGroupName' --output text 2>/dev/null || true)
+            if [ "$CW_EXISTS" = "/aws/eks/mana-food-eks/cluster" ]; then
+              echo "📥 Importando CloudWatch Log Group..."
+              terraform import \
+                -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+                'module.eks.aws_cloudwatch_log_group.this[0]' /aws/eks/mana-food-eks/cluster || true
+            else
+              echo "⚠️ CloudWatch Log Group nao encontrado na AWS - pulando import"
+            fi
           else
             echo "✅ CloudWatch Log Group já está no state"
           fi

@@ -19,9 +19,9 @@ provider "aws" {
 # ==========================================
 
 provider "kubernetes" {
-  host                   = try(data.aws_eks_cluster.cluster.endpoint, "")
-  cluster_ca_certificate = try(base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data), "")
-  token                  = try(data.aws_eks_cluster_auth.cluster.token, "")
+  host                   = var.create_k8s_resources ? data.aws_eks_cluster.cluster.endpoint : ""
+  cluster_ca_certificate = var.create_k8s_resources ? base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data) : ""
+  token                  = var.create_k8s_resources ? data.aws_eks_cluster_auth.cluster.token : ""
 
   exec {
     api_version = "client.authentication.k8s.io/v1"
@@ -30,7 +30,7 @@ provider "kubernetes" {
       "eks",
       "get-token",
       "--cluster-name",
-      try(module.eks.cluster_name, "dummy"),
+      var.eks_cluster_name,
       "--region",
       var.aws_region
     ]
@@ -46,9 +46,9 @@ provider "helm" {
   # NÃO usa bloco "kubernetes" aninhado!
   
   kubernetes {
-    host                   = try(data.aws_eks_cluster.cluster.endpoint, "")
-    cluster_ca_certificate = try(base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data), "")
-    token                  = try(data.aws_eks_cluster_auth.cluster.token, "")
+    host                   = var.create_k8s_resources ? data.aws_eks_cluster.cluster.endpoint : ""
+    cluster_ca_certificate = var.create_k8s_resources ? base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data) : ""
+    token                  = var.create_k8s_resources ? data.aws_eks_cluster_auth.cluster.token : ""
   }
 }
 
@@ -57,9 +57,9 @@ provider "helm" {
 # ==========================================
 
 provider "kubectl" {
-  host                   = try(data.aws_eks_cluster.cluster.endpoint, "")
-  cluster_ca_certificate = try(base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data), "")
-  token                  = try(data.aws_eks_cluster_auth.cluster.token, "")
+  host                   = var.create_k8s_resources ? data.aws_eks_cluster.cluster.endpoint : ""
+  cluster_ca_certificate = var.create_k8s_resources ? base64decode(data.aws_eks_cluster.cluster.certificate_authority[0].data) : ""
+  token                  = var.create_k8s_resources ? data.aws_eks_cluster_auth.cluster.token : ""
   load_config_file       = false
 
   exec {
@@ -69,7 +69,7 @@ provider "kubectl" {
       "eks",
       "get-token",
       "--cluster-name",
-      try(module.eks.cluster_name, "dummy"),
+      var.eks_cluster_name,
       "--region",
       var.aws_region
     ]
