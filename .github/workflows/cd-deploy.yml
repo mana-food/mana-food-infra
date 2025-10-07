@@ -111,10 +111,34 @@ jobs:
             echo "image-tag=$IMAGE_TAG" >> $GITHUB_OUTPUT
           fi
 
+  fix-terraform:
+    name: 'Fix Terraform'
+    runs-on: ubuntu-latest
+    needs: build-lambda
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fix Lambda Terraform
+        run: |
+          # Corrigir o arquivo lambda.tf removendo AWS_REGION das variáveis de ambiente
+          sed -i 's/AWS_REGION.*= var.aws_region/# AWS_REGION removido - variável reservada/' infra/terraform/envs/prod/lambda.tf
+          
+          # Verificar se a correção foi aplicada
+          echo "Arquivo lambda.tf corrigido:"
+          grep -A 10 -B 5 "environment" infra/terraform/envs/prod/lambda.tf || true
+
+      - name: Upload fixed Terraform
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-fixed-${{ github.run_id }}
+          path: infra/
+
   terraform-deploy:
     name: 'Deploy Infra'
     runs-on: ubuntu-latest
-    needs: build-lambda
+    needs: [build-lambda, fix-terraform]
     defaults:
       run:
         working-directory: infra/terraform/envs/prod
@@ -123,8 +147,11 @@ jobs:
       aurora-endpoint: ${{ steps.outputs.outputs.aurora-endpoint }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Download fixed Terraform
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-fixed-${{ github.run_id }}
+          path: ./
 
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -144,11 +171,6 @@ jobs:
         with:
           name: lambda-deployment-${{ github.run_id }}
           path: infra/terraform/envs/prod
-
-      - name: Fix CloudWatch Log Group
-        run: |
-          # Remover log group existente se houver conflito
-          aws logs delete-log-group --log-group-name "/aws/lambda/mana-food-api" --region sa-east-1 || true
 
       - name: Terraform Init
         run: |
@@ -227,10 +249,16 @@ jobs:
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
           CONNECTION_STRING="Server=$AURORA_ENDPOINT;Port=3306;Database=appdb;Uid=admin;Pwd=${{ secrets.DB_PASSWORD || 'TempPassword123!' }};SslMode=Required;"
           
+          # Configurar apenas variáveis não-reservadas
           aws lambda update-function-configuration \
             --function-name mana-food-api \
             --region sa-east-1 \
-            --environment Variables="{\"MYSQL_CONNECTION_STRING\":\"$CONNECTION_STRING\"}"
+            --environment Variables="{
+              \"MYSQL_CONNECTION_STRING\":\"$CONNECTION_STRING\",
+              \"ASPNETCORE_ENVIRONMENT\":\"Production\",
+              \"AURORA_ENDPOINT\":\"$AURORA_ENDPOINT\",
+              \"DATABASE_NAME\":\"appdb\"
+            }"
 
   test-lambda:
     name: 'Test Auth'
@@ -323,7 +351,6 @@ jobs:
           kubectl rollout status deployment/mana-food-app --timeout=300s
           kubectl get svc mana-food-service
 
-  # JOB DE ROLLBACK - EXECUTADO EM CASO DE ERRO
   rollback:
     name: 'Rollback'
     runs-on: ubuntu-latest
@@ -334,8 +361,11 @@ jobs:
         working-directory: infra/terraform/envs/prod
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Download fixed Terraform
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-fixed-${{ github.run_id }}
+          path: ./
 
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
@@ -366,7 +396,6 @@ jobs:
 
       - name: Cleanup EKS Apps
         run: |
-          # Tentar limpar aplicações do EKS
           aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks || true
           kubectl delete deployment mana-food-app || true
           kubectl delete service mana-food-service || true
