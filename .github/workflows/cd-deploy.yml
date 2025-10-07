@@ -174,6 +174,7 @@ jobs:
       terraform-success: ${{ steps.apply.outcome }}
       aurora-endpoint: ${{ steps.outputs.outputs.aurora-endpoint }}
       aurora-secret-arn: ${{ steps.outputs.outputs.aurora-secret-arn }}
+      db-setup-function: ${{ steps.outputs.outputs.db-setup-function }}
 
     steps:
       - name: Checkout
@@ -221,6 +222,10 @@ jobs:
           # Obter ARN do secret do Aurora
           SECRET_ARN=$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].MasterUserSecret.SecretArn' --output text 2>/dev/null || echo "None")
           echo "aurora-secret-arn=$SECRET_ARN" >> $GITHUB_OUTPUT
+          
+          # Obter nome da função de setup do DB
+          DB_SETUP_FUNCTION=$(terraform output -raw lambda_db_setup_function_name)
+          echo "db-setup-function=$DB_SETUP_FUNCTION" >> $GITHUB_OUTPUT
 
   wait-aurora:
     name: 'Aguardar Aurora Disponível'
@@ -228,7 +233,8 @@ jobs:
     needs: terraform-deploy
     if: needs.terraform-deploy.outputs.terraform-success == 'success'
     outputs:
-      connection-string: ${{ steps.connection.outputs.connection-string }}
+      connection-string: ${{ steps.invoke.outputs.connection-string }}
+      setup-success: ${{ steps.invoke.outcome }}
 
     steps:
       - name: Configure AWS
@@ -254,12 +260,38 @@ jobs:
             done
           "
 
-      - name: Get connection string
-        id: connection
+      - name: Setup Database via Lambda
+        id: invoke
         run: |
+          DB_SETUP_FUNCTION="${{ needs.terraform-deploy.outputs.db-setup-function }}"
           SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
           AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
           
+          echo "🚀 Executando setup do banco via Lambda: $DB_SETUP_FUNCTION"
+          
+          # Invocar a Lambda de setup
+          PAYLOAD='{"password": "${{ secrets.DB_PASSWORD || 'TempPassword123!' }}"}'
+          
+          aws lambda invoke \
+            --function-name "$DB_SETUP_FUNCTION" \
+            --payload "$PAYLOAD" \
+            --region sa-east-1 \
+            response.json
+          
+          echo "📄 Resposta da Lambda:"
+          cat response.json
+          echo ""
+          
+          # Verificar se houve erro
+          if grep -q '"statusCode": 200' response.json; then
+            echo "✅ Setup do banco executado com sucesso!"
+          else
+            echo "❌ Erro no setup do banco"
+            cat response.json
+            exit 1
+          fi
+          
+          # Obter connection string
           if [ "$SECRET_ARN" != "None" ] && [ "$SECRET_ARN" != "null" ] && [ -n "$SECRET_ARN" ]; then
             echo "🔐 Obtendo credenciais do AWS Secrets Manager..."
             SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_ARN" --region sa-east-1 --query 'SecretString' --output text)
@@ -275,7 +307,7 @@ jobs:
           CONNECTION_STRING="Server=$AURORA_ENDPOINT;Port=3306;Database=manafooddb;Uid=$DB_USERNAME;Pwd=$DB_PASSWORD;SslMode=Required;"
           
           echo "connection-string=$CONNECTION_STRING" >> $GITHUB_OUTPUT
-          echo "✅ Connection string preparada para aplicação .NET 9"
+          echo "✅ Connection string preparada"
 
   configure-lambda:
     name: 'Config Lambda .NET 9'
@@ -297,17 +329,14 @@ jobs:
           
           echo "🔧 Configurando Lambda .NET 9 de autenticação..."
           
+          # Escapar connection string para JSON
+          CONNECTION_STRING_ESCAPED=$(echo "$CONNECTION_STRING" | sed 's/"/\\"/g')
+          
           # Configurar variáveis de ambiente da Lambda
           aws lambda update-function-configuration \
             --function-name mana-food-api \
             --region sa-east-1 \
-            --environment Variables="{
-              \"ConnectionStrings__DefaultConnection\":\"$CONNECTION_STRING\",
-              \"ASPNETCORE_ENVIRONMENT\":\"Production\",
-              \"DATABASE_HOST\":\"$AURORA_ENDPOINT\",
-              \"DATABASE_NAME\":\"manafooddb\",
-              \"DATABASE_PORT\":\"3306\"
-            }"
+            --environment "Variables={\"ConnectionStrings__DefaultConnection\":\"$CONNECTION_STRING_ESCAPED\",\"ASPNETCORE_ENVIRONMENT\":\"Production\",\"DATABASE_HOST\":\"$AURORA_ENDPOINT\",\"DATABASE_NAME\":\"manafooddb\",\"DATABASE_PORT\":\"3306\"}"
           
           # Aguardar atualização
           aws lambda wait function-updated --function-name mana-food-api --region sa-east-1
@@ -532,10 +561,66 @@ jobs:
             done
           ' || echo "⚠️ Timeout aguardando Load Balancer"
 
+  rollback:
+    name: 'Rollback'
+    runs-on: ubuntu-latest
+    needs: [terraform-deploy, wait-aurora, configure-lambda, deploy-apps]
+    if: failure() && (needs.terraform-deploy.result == 'success')
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/prod
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: sa-east-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            -backend-config="key=mana-food-prod.tfstate" \
+            -backend-config="region=sa-east-1"
+
+      - name: Cleanup EKS Apps
+        run: |
+          echo "🧹 Limpando aplicações do EKS..."
+          aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks || true
+          kubectl delete deployment mana-food-api mana-food-gateway || true
+          kubectl delete service mana-food-api-service mana-food-gateway-service || true
+          kubectl delete configmap mana-food-config || true
+          kubectl delete secret mana-food-secrets || true
+        continue-on-error: true
+
+      - name: Terraform Destroy
+        run: |
+          echo "🚨 Executando rollback da infraestrutura..."
+          terraform destroy -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" -auto-approve
+        continue-on-error: true
+
+      - name: Cleanup ECR Images
+        run: |
+          echo "🗑️ Limpando imagens ECR..."
+          aws ecr delete-repository --repository-name mana-food-gateway --force --region sa-east-1 || true
+          aws ecr delete-repository --repository-name mana-food-api --force --region sa-east-1 || true
+        continue-on-error: true
+
   status:
     name: 'Status Final'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, build-apps, wait-aurora, configure-lambda, deploy-apps]
+    needs: [terraform-deploy, build-apps, wait-aurora, configure-lambda, deploy-apps, rollback]
     if: always()
 
     steps:
@@ -545,12 +630,18 @@ jobs:
           echo "======================================"
           echo "Infraestrutura: ${{ needs.terraform-deploy.result }}"
           echo "Build Apps: ${{ needs.build-apps.result }}"
-          echo "Aurora Wait: ${{ needs.wait-aurora.result }}"
+          echo "Aurora Setup: ${{ needs.wait-aurora.result }}"
           echo "Lambda Config: ${{ needs.configure-lambda.result }}"
           echo "Apps Deploy: ${{ needs.deploy-apps.result }}"
+          echo "Rollback: ${{ needs.rollback.result }}"
           echo ""
           
-          if [ "${{ needs.deploy-apps.result }}" = "success" ]; then
+          if [ "${{ needs.rollback.result }}" = "success" ]; then
+            echo "🚨 ROLLBACK EXECUTADO COM SUCESSO"
+            echo "  • Aplicações EKS removidas"
+            echo "  • Infraestrutura AWS destruída"
+            echo "  • Imagens ECR limpas"
+          elif [ "${{ needs.deploy-apps.result }}" = "success" ]; then
             echo "✅ MANA FOOD DEPLOYADO SEGUINDO REGRAS OBRIGATÓRIAS!"
             echo ""
             echo "🏗️ ARQUITETURA IMPLEMENTADA:"
