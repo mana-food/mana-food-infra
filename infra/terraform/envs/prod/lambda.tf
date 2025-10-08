@@ -110,7 +110,6 @@ resource "aws_lambda_function" "api" {
   timeout       = 30
   memory_size   = 512
 
-  # Usar o arquivo ZIP da build ou dummy se não existir
   filename         = fileexists("lambda-deployment.zip") ? "lambda-deployment.zip" : data.archive_file.lambda_dummy.output_path
   source_code_hash = fileexists("lambda-deployment.zip") ? filebase64sha256("lambda-deployment.zip") : data.archive_file.lambda_dummy.output_base64sha256
 
@@ -121,7 +120,6 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      # ✅ NOVA CONFIGURAÇÃO: Secrets Manager
       AURORA_SECRET_ARN      = module.aurora.cluster_master_user_secret[0].secret_arn
       ASPNETCORE_ENVIRONMENT = "Production"
       DATABASE_HOST          = module.aurora.cluster_endpoint
@@ -142,7 +140,7 @@ resource "aws_lambda_function" "api" {
 }
 
 # ==========================================
-# ARQUIVO DUMMY PARA LAMBDA (se não existir o real)
+# ARQUIVO DUMMY (caso não exista build real)
 # ==========================================
 
 data "archive_file" "lambda_dummy" {
@@ -171,6 +169,7 @@ resource "aws_api_gateway_rest_api" "lambda_api" {
   }
 }
 
+# Recurso greedy proxy: /{proxy+}
 resource "aws_api_gateway_resource" "lambda_resource" {
   rest_api_id = aws_api_gateway_rest_api.lambda_api.id
   parent_id   = aws_api_gateway_rest_api.lambda_api.root_resource_id
@@ -194,6 +193,30 @@ resource "aws_api_gateway_integration" "lambda_integration" {
   uri                     = aws_lambda_function.api.invoke_arn
 }
 
+# ==========================================
+# NOVO: Método ANY no root "/" para suportar /prod/ (sem segmento)
+# ==========================================
+
+resource "aws_api_gateway_method" "lambda_root_method" {
+  rest_api_id   = aws_api_gateway_rest_api.lambda_api.id
+  resource_id   = aws_api_gateway_rest_api.lambda_api.root_resource_id
+  http_method   = "ANY"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "lambda_root_integration" {
+  rest_api_id             = aws_api_gateway_rest_api.lambda_api.id
+  resource_id             = aws_api_gateway_rest_api.lambda_api.root_resource_id
+  http_method             = aws_api_gateway_method.lambda_root_method.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.api.invoke_arn
+}
+
+# ==========================================
+# PERMISSÃO PARA API GATEWAY INVOCAR LAMBDA
+# ==========================================
+
 resource "aws_lambda_permission" "api_gateway_invoke" {
   statement_id  = "AllowExecutionFromAPIGateway"
   action        = "lambda:InvokeFunction"
@@ -202,9 +225,14 @@ resource "aws_lambda_permission" "api_gateway_invoke" {
   source_arn    = "${aws_api_gateway_rest_api.lambda_api.execution_arn}/*/*"
 }
 
+# ==========================================
+# DEPLOYMENT & STAGE
+# ==========================================
+
 resource "aws_api_gateway_deployment" "lambda_deployment" {
   depends_on = [
-    aws_api_gateway_integration.lambda_integration
+    aws_api_gateway_integration.lambda_integration,
+    aws_api_gateway_integration.lambda_root_integration
   ]
 
   rest_api_id = aws_api_gateway_rest_api.lambda_api.id
