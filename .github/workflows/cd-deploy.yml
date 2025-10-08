@@ -298,8 +298,7 @@ jobs:
           echo "⚡ Função: $LAMBDA_FUNCTION_NAME"
 
           # Formato exigido: Variables={K=V,K=V,...} (NÃO usar JSON)
-          ENV_VARS="AURORA_SECRET_ARN=$AURORA_SECRET_ARN,ASPNETCORE_ENVIRONMENT=Production,DATABASE_HOST=$AURORA_ENDPOINT,DATABASE_NAME=manafooddb,DATABASE_PORT=3306"
-
+          ENV_VARS="AURORA_SECRET_ARN=$AURORA_SECRET_ARN,ASPNETCORE_ENVIRONMENT=Production"
           aws lambda update-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --region sa-east-1 \
@@ -313,7 +312,7 @@ jobs:
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --query 'Environment.Variables' \
             --region sa-east-1
-            
+
   deploy-apps:
     name: 'Deploy Gateway & API .NET 9 no EKS'
     runs-on: ubuntu-latest
@@ -375,9 +374,6 @@ jobs:
           data:
             ASPNETCORE_ENVIRONMENT: "Production"
             ASPNETCORE_URLS: "http://+:8080"
-            DATABASE_HOST: "$AURORA_ENDPOINT"
-            DATABASE_NAME: "manafooddb"
-            DATABASE_PORT: "3306"
           ---
           # API .NET 9 Deployment (aplica migrations automaticamente)
           apiVersion: apps/v1
@@ -419,13 +415,13 @@ jobs:
                       cpu: "500m"
                   livenessProbe:
                     httpGet:
-                      path: /swagger
+                      path: /healthz
                       port: 8080
                     initialDelaySeconds: 180
                     periodSeconds: 30
                   readinessProbe:
                     httpGet:
-                      path: /swagger
+                      path: /healthz
                       port: 8080
                     initialDelaySeconds: 120
                     periodSeconds: 15

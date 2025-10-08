@@ -37,3 +37,22 @@ module "eks" {
     Name = "${var.project_name}-eks"
   }
 }
+
+resource "aws_iam_role_policy" "eks_nodes_secrets_manager" {
+  name = "${var.project_name}-eks-nodes-secrets-policy"
+  role = module.eks.eks_managed_node_groups["default"].iam_role_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue",
+          "secretsmanager:DescribeSecret"
+        ]
+        Resource = module.aurora.cluster_master_user_secret[0].secret_arn
+      }
+    ]
+  })
+}
