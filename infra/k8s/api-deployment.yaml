@@ -36,19 +36,21 @@ spec:
             name: mana-food-config
         - secretRef:
             name: mana-food-secrets
-        livenessProbe:
+        startupProbe:
           httpGet:
             path: /healthz
             port: 8080
-          initialDelaySeconds: 60
-          periodSeconds: 30
-          timeoutSeconds: 10
-          failureThreshold: 3
+          periodSeconds: 5
+          failureThreshold: 30
         readinessProbe:
           httpGet:
             path: /healthz
             port: 8080
-          initialDelaySeconds: 30
           periodSeconds: 10
-          timeoutSeconds: 5
+          failureThreshold: 6
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8080
+          periodSeconds: 20
           failureThreshold: 3
