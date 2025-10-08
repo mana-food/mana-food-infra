@@ -51,8 +51,24 @@ resource "aws_iam_role_policy" "eks_nodes_secrets_manager" {
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret"
         ]
-        Resource = module.aurora.cluster_master_user_secret[0].secret_arn
+        Resource = [
+          module.aurora.cluster_master_user_secret[0].secret_arn,
+          "${module.aurora.cluster_master_user_secret[0].secret_arn}*"
+        ]
       }
     ]
   })
+
+  depends_on = [
+    module.eks,
+    module.aurora
+  ]
+}
+
+# Política adicional para logs CloudWatch (se necessário)
+resource "aws_iam_role_policy_attachment" "eks_nodes_cloudwatch" {
+  role       = module.eks.eks_managed_node_groups["default"].iam_role_name
+  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+
+  depends_on = [module.eks]
 }

@@ -23,8 +23,12 @@ permissions:
 env:
   ECR_REPOSITORY_GATEWAY: mana-food-gateway
   ECR_REPOSITORY_API: mana-food-api
+  AWS_REGION: us-east-1
 
 jobs:
+  # ===================================================================
+  # FASE 1: BUILD PARALELO (Não dependem de infra)
+  # ===================================================================
   build-lambda:
     name: 'Build Lambda .NET 9'
     runs-on: ubuntu-latest
@@ -92,7 +96,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -100,11 +104,11 @@ jobs:
 
       - name: Create ECR repositories
         run: |
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_GATEWAY --region us-east-1 || \
-          aws ecr create-repository --repository-name $ECR_REPOSITORY_GATEWAY --region us-east-1
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_GATEWAY --region ${{ env.AWS_REGION }} || \
+          aws ecr create-repository --repository-name $ECR_REPOSITORY_GATEWAY --region ${{ env.AWS_REGION }}
           
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_API --region us-east-1 || \
-          aws ecr create-repository --repository-name $ECR_REPOSITORY_API --region us-east-1
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_API --region ${{ env.AWS_REGION }} || \
+          aws ecr create-repository --repository-name $ECR_REPOSITORY_API --region ${{ env.AWS_REGION }}
 
       - name: Build Gateway .NET 9
         id: build-gateway
@@ -163,8 +167,11 @@ jobs:
         run: |
           echo "success=true" >> $GITHUB_OUTPUT
 
-  terraform-deploy:
-    name: 'Deploy Infraestrutura'
+  # ===================================================================
+  # FASE 2: INFRAESTRUTURA CRÍTICA (VPC + Aurora - 15-20 min)
+  # ===================================================================
+  terraform-foundation:
+    name: 'Deploy VPC + Aurora (Wave 1) - 15-20 min'
     runs-on: ubuntu-latest
     needs: build-lambda
     defaults:
@@ -174,8 +181,6 @@ jobs:
       terraform-success: ${{ steps.apply.outcome }}
       aurora-endpoint: ${{ steps.outputs.outputs.aurora-endpoint }}
       aurora-secret-arn: ${{ steps.outputs.outputs.aurora-secret-arn }}
-      lambda-function-name: ${{ steps.outputs.outputs.lambda-function-name }}
-      lambda-api-url: ${{ steps.outputs.outputs.lambda-api-url }}
 
     steps:
       - name: Checkout
@@ -186,7 +191,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -205,38 +210,36 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -backend-config="key=mana-food-prod.tfstate" \
-            -backend-config="region=us-east-1"
+            -backend-config="region=${{ env.AWS_REGION }}"
 
-      - name: Terraform Apply
+      - name: Terraform Apply - Foundation
         id: apply
         run: |
+          echo "🚀 Criando infraestrutura base: VPC + Aurora MySQL (15-20 min)..."
           terraform plan -var="bucket_state_name=${{ secrets.AWS_TF_STATE_BUCKET }}" -out=tfplan
           terraform apply -auto-approve tfplan
 
-      - name: Get Outputs
+      - name: Get Foundation Outputs
         id: outputs
         if: steps.apply.outcome == 'success'
         run: |
           AURORA_ENDPOINT=$(terraform output -raw aurora_endpoint)
           AURORA_SECRET_ARN=$(terraform output -raw aurora_secret_arn)
-          LAMBDA_FUNCTION_NAME=$(terraform output -raw lambda_function_name)
-          LAMBDA_API_URL=$(terraform output -raw lambda_api_url)
           
           echo "aurora-endpoint=$AURORA_ENDPOINT" >> $GITHUB_OUTPUT
           echo "aurora-secret-arn=$AURORA_SECRET_ARN" >> $GITHUB_OUTPUT
-          echo "lambda-function-name=$LAMBDA_FUNCTION_NAME" >> $GITHUB_OUTPUT
-          echo "lambda-api-url=$LAMBDA_API_URL" >> $GITHUB_OUTPUT
           
           echo "✅ Aurora Endpoint: $AURORA_ENDPOINT"
           echo "🔐 Aurora Secret ARN: $AURORA_SECRET_ARN"
-          echo "⚡ Lambda Function: $LAMBDA_FUNCTION_NAME"
-          echo "🌐 Lambda API URL: $LAMBDA_API_URL"
 
+  # ===================================================================
+  # FASE 3: AGUARDAR AURORA (Crítico - 15-20 min)
+  # ===================================================================
   wait-aurora:
-    name: 'Aguardar Aurora Disponível'
+    name: 'Aguardar Aurora Disponível (15-20 min)'
     runs-on: ubuntu-latest
-    needs: terraform-deploy
-    if: needs.terraform-deploy.outputs.terraform-success == 'success'
+    needs: terraform-foundation
+    if: needs.terraform-foundation.outputs.terraform-success == 'success'
 
     steps:
       - name: Configure AWS
@@ -244,38 +247,144 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Wait for Aurora availability
         run: |
-          echo "⏳ Aguardando Aurora estar disponível..."
+          echo "⏳ Aguardando Aurora estar disponível (pode demorar 15-20 min)..."
           
-          timeout 600 bash -c "
+          # Timeout aumentado para 1200s (20 min) - Aurora Serverless v2 pode demorar
+          timeout 1200 bash -c "
+            ATTEMPT=0
             while true; do
-              STATUS=\$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region us-east-1 --query 'DBClusters[0].Status' --output text 2>/dev/null || echo 'unknown')
+              ATTEMPT=\$((ATTEMPT+1))
+              STATUS=\$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region ${{ env.AWS_REGION }} --query 'DBClusters[0].Status' --output text 2>/dev/null || echo 'unknown')
+              
+              echo \"Tentativa \$ATTEMPT - Status atual: \$STATUS\"
+              
               if [ \"\$STATUS\" = \"available\" ]; then
                 echo \"✅ Aurora disponível!\"
-                break
+                exit 0
               fi
-              echo \"Status: \$STATUS - aguardando...\"
+              
+              if [ \"\$STATUS\" = \"failed\" ] || [ \"\$STATUS\" = \"deleting\" ]; then
+                echo \"❌ Aurora em estado crítico: \$STATUS\"
+                exit 1
+              fi
+              
+              if [ \"\$STATUS\" = \"unknown\" ]; then
+                # Debug extra a cada 4 tentativas quando ainda unknown
+                if [ \$((ATTEMPT % 4)) -eq 0 ]; then
+                  echo \"🔎 Debug: listando clusters visíveis...\"
+                  aws rds describe-db-clusters --region ${{ env.AWS_REGION }} --query 'DBClusters[].{Id:DBClusterIdentifier,Status:Status}' || true
+                fi
+              fi
+              
               sleep 30
             done
           "
 
       - name: Verify Secrets Manager
         run: |
-          SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
+          SECRET_ARN="${{ needs.terraform-foundation.outputs.aurora-secret-arn }}"
           echo "🔐 Verificando AWS Secrets Manager..."
           echo "Secret ARN: $SECRET_ARN"
           
           # Testar acesso ao secret
-          aws secretsmanager describe-secret --secret-id "$SECRET_ARN" --region us-east-1
+          aws secretsmanager describe-secret --secret-id "$SECRET_ARN" --region ${{ env.AWS_REGION }}
           echo "✅ AWS Secrets Manager configurado corretamente"
 
+  # ===================================================================
+  # FASE 4: INFRAESTRUTURA COMPUTE (EKS + Lambda - 8-12 min)
+  # ===================================================================
+  terraform-compute:
+    name: 'Deploy EKS + Lambda (Wave 2) - 8-12 min'
+    runs-on: ubuntu-latest
+    needs: [terraform-foundation, wait-aurora]
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/prod
+    outputs:
+      lambda-function-name: ${{ steps.outputs.outputs.lambda-function-name }}
+      lambda-api-url: ${{ steps.outputs.outputs.lambda-api-url }}
+      eks-ready: ${{ steps.verify-eks.outcome }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6.0'
+          terraform_wrapper: false
+
+      - name: Download Lambda
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-deployment-${{ github.run_id }}
+          path: infra/terraform/envs/prod
+
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
+            -backend-config="key=mana-food-prod.tfstate" \
+            -backend-config="region=${{ env.AWS_REGION }}"
+
+      - name: Get Compute Outputs
+        id: outputs
+        run: |
+          # Aurora já existe, pegar outros outputs
+          LAMBDA_FUNCTION_NAME=$(terraform output -raw lambda_function_name)
+          LAMBDA_API_URL=$(terraform output -raw lambda_api_url)
+          
+          echo "lambda-function-name=$LAMBDA_FUNCTION_NAME" >> $GITHUB_OUTPUT
+          echo "lambda-api-url=$LAMBDA_API_URL" >> $GITHUB_OUTPUT
+          
+          echo "⚡ Lambda Function: $LAMBDA_FUNCTION_NAME"
+          echo "🌐 Lambda API URL: $LAMBDA_API_URL"
+
+      - name: Verify EKS Ready
+        id: verify-eks
+        run: |
+          echo "🔍 Verificando se EKS está pronto..."
+          
+          # Aguardar EKS cluster estar ativo
+          aws eks wait cluster-active --name mana-food-eks --region ${{ env.AWS_REGION }}
+          
+          # Configurar kubectl
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name mana-food-eks
+          
+          # Verificar nodes prontos
+          timeout 300 bash -c "
+            while true; do
+              READY_NODES=\$(kubectl get nodes --no-headers | grep Ready | wc -l)
+              if [ \"\$READY_NODES\" -ge 2 ]; then
+                echo \"✅ EKS cluster pronto com \$READY_NODES nodes\"
+                break
+              fi
+              echo \"⏳ Aguardando nodes EKS (\$READY_NODES/2 prontos)...\"
+              sleep 30
+            done
+          "
+          
+          echo "✅ EKS cluster completamente operacional"
+
+  # ===================================================================
+  # FASE 5: CONFIGURAÇÃO E DEPLOY (2-5 min)
+  # ===================================================================
   configure-lambda:
     name: 'Config Lambda .NET 9 - Secrets Manager'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, wait-aurora]
+    needs: [terraform-foundation, wait-aurora, terraform-compute]
 
     steps:
       - name: Configure AWS
@@ -283,7 +392,16 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Wait for Lambda and IAM propagation
+        run: |
+          echo "⏳ Aguardando Lambda function e propagação IAM..."
+          sleep 30
+          
+          LAMBDA_FUNCTION_NAME="${{ needs.terraform-compute.outputs.lambda-function-name }}"
+          aws lambda wait function-active --function-name "$LAMBDA_FUNCTION_NAME" --region ${{ env.AWS_REGION }}
+          echo "✅ Lambda function ativa"
 
       - name: Configure Lambda with Secrets Manager
         shell: bash
@@ -292,36 +410,34 @@ jobs:
           # Desabilita history expansion para não interferir com '!' do ARN
           set +H
 
-          AURORA_SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
-          AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
-          LAMBDA_FUNCTION_NAME="${{ needs.terraform-deploy.outputs.lambda-function-name }}"
+          AURORA_SECRET_ARN="${{ needs.terraform-foundation.outputs.aurora-secret-arn }}"
+          LAMBDA_FUNCTION_NAME="${{ needs.terraform-compute.outputs.lambda-function-name }}"
 
           echo "🔧 Configurando Lambda .NET 9 com AWS Secrets Manager..."
           echo "🔐 Secret ARN: $AURORA_SECRET_ARN"
-          echo "🗄️ RDS Endpoint: $AURORA_ENDPOINT"
           echo "⚡ Função: $LAMBDA_FUNCTION_NAME"
 
           # Formato exigido: Variables={K=V,K=V,...} (NÃO usar JSON)
           ENV_VARS="AURORA_SECRET_ARN=$AURORA_SECRET_ARN,ASPNETCORE_ENVIRONMENT=Production"
           aws lambda update-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
-            --region us-east-1 \
+            --region ${{ env.AWS_REGION }} \
             --environment "Variables={$ENV_VARS}"
 
           echo "⏳ Aguardando atualização..."
-          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region us-east-1
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region ${{ env.AWS_REGION }}
 
           echo "✅ Lambda atualizada. Variáveis aplicadas:"
           aws lambda get-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --query 'Environment.Variables' \
-            --region us-east-1
+            --region ${{ env.AWS_REGION }}
 
   deploy-apps:
     name: 'Deploy Gateway & API .NET 9 no EKS'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, build-apps, wait-aurora, configure-lambda]
-    if: needs.build-apps.outputs.build-success == 'true'
+    needs: [terraform-foundation, build-apps, terraform-compute, configure-lambda]
+    if: needs.build-apps.outputs.build-success == 'true' && needs.terraform-compute.outputs.eks-ready == 'success'
 
     steps:
       - name: Configure AWS
@@ -329,24 +445,34 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
 
+      - name: Configure kubectl and verify IAM
+        run: |
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name mana-food-eks
+          
+          echo "🔍 Verificando se EKS nodes podem acessar Secrets Manager..."
+          SECRET_ARN="${{ needs.terraform-foundation.outputs.aurora-secret-arn }}"
+          
+          # Teste básico de conectividade
+          aws secretsmanager describe-secret --secret-id "$SECRET_ARN" --region ${{ env.AWS_REGION }}
+          echo "✅ Secret está acessível"
+
       - name: Deploy aplicações .NET 9 no EKS
         run: |
-          aws eks update-kubeconfig --region us-east-1 --name mana-food-eks
-          
           # Configurações
           GATEWAY_IMAGE="${{ needs.build-apps.outputs.gateway-image }}"
           API_IMAGE="${{ needs.build-apps.outputs.api-image }}"
-          AURORA_ENDPOINT="${{ needs.terraform-deploy.outputs.aurora-endpoint }}"
-          AURORA_SECRET_ARN="${{ needs.terraform-deploy.outputs.aurora-secret-arn }}"
+          AURORA_ENDPOINT="${{ needs.terraform-foundation.outputs.aurora-endpoint }}"
+          AURORA_SECRET_ARN="${{ needs.terraform-foundation.outputs.aurora-secret-arn }}"
+          LAMBDA_API_URL="${{ needs.terraform-compute.outputs.lambda-api-url }}"
           
-          # Obter URL da Lambda de autenticação
+          # Obter URL da Lambda de autenticação (fallback se needed)
           API_ID=$(aws apigateway get-rest-apis --query 'items[?name==`mana-food-api`].id' --output text)
-          LAMBDA_AUTH_URL="https://$API_ID.execute-api.us-east-1.amazonaws.com/prod"
+          LAMBDA_AUTH_URL="https://$API_ID.execute-api.${{ env.AWS_REGION }}.amazonaws.com/prod"
           
           echo "🚀 Deployando ManaFood .NET 9 no EKS com AWS Secrets Manager..."
           echo "🌐 Gateway .NET 9: $GATEWAY_IMAGE"
@@ -380,7 +506,7 @@ jobs:
             ASPNETCORE_URLS: "http://+:8080"
             DATABASE_HOST: "$AURORA_ENDPOINT"
             API_BASE_URL: "http://mana-food-api-service:8080"
-            LAMBDA_URL: "${{ needs.terraform-deploy.outputs.lambda-api-url }}"
+            LAMBDA_URL: "$LAMBDA_API_URL"
           ---
           # API .NET 9 Deployment (aplica migrations automaticamente)
           apiVersion: apps/v1
@@ -420,18 +546,30 @@ jobs:
                     limits:
                       memory: "512Mi"
                       cpu: "500m"
-                  livenessProbe:
+                  startupProbe:
                     httpGet:
                       path: /healthz
                       port: 8080
-                    initialDelaySeconds: 180
-                    periodSeconds: 30
+                    initialDelaySeconds: 10
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 12
                   readinessProbe:
                     httpGet:
                       path: /healthz
                       port: 8080
-                    initialDelaySeconds: 120
-                    periodSeconds: 15
+                    initialDelaySeconds: 30
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 2
+                  livenessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: 8080
+                    initialDelaySeconds: 60
+                    periodSeconds: 10
+                    timeoutSeconds: 5
+                    failureThreshold: 3
           ---
           # Gateway .NET 9 Deployment
           apiVersion: apps/v1
@@ -465,6 +603,30 @@ jobs:
                     limits:
                       memory: "256Mi"
                       cpu: "250m"
+                  startupProbe:
+                    httpGet:
+                      path: /healthz
+                      port: 8080
+                    initialDelaySeconds: 5
+                    periodSeconds: 3
+                    timeoutSeconds: 3
+                    failureThreshold: 10
+                  readinessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: 8080
+                    initialDelaySeconds: 15
+                    periodSeconds: 5
+                    timeoutSeconds: 3
+                    failureThreshold: 2
+                  livenessProbe:
+                    httpGet:
+                      path: /healthz
+                      port: 8080
+                    initialDelaySeconds: 30
+                    periodSeconds: 10
+                    timeoutSeconds: 3
+                    failureThreshold: 3
           ---
           # API Service (interno)
           apiVersion: v1
@@ -494,20 +656,25 @@ jobs:
               targetPort: 8080
             type: LoadBalancer
           EOF
+
+      - name: Monitor deployment progress
+        run: |
+          echo "🔍 Verificando status dos pods..."
+          kubectl get pods -l app=mana-food-api -o wide
+          kubectl get pods -l app=mana-food-gateway -o wide
           
           echo "⏳ Aguardando API aplicar migrations com credenciais do Secrets Manager..."
-          kubectl rollout status deployment/mana-food-api --timeout=900s
+          kubectl rollout status deployment/mana-food-api --timeout=300s
           
           echo "⏳ Aguardando Gateway..."
-          kubectl rollout status deployment/mana-food-gateway --timeout=300s
+          kubectl rollout status deployment/mana-food-gateway --timeout=120s
+          
+          echo "📊 Status final dos pods:"
+          kubectl get pods -o wide
+          kubectl get svc -o wide
 
       - name: Verificar arquitetura deployada
         run: |
-          echo "📊 Status da arquitetura ManaFood com AWS Secrets Manager:"
-          kubectl get pods -o wide
-          kubectl get svc -o wide
-          
-          echo ""
           echo "🔍 Logs da API (migrations com Secrets Manager):"
           kubectl logs deployment/mana-food-api --tail=30 || echo "Logs ainda não disponíveis"
           
@@ -532,11 +699,14 @@ jobs:
             done
           ' || echo "⚠️ Timeout aguardando Load Balancer"
 
+  # ===================================================================
+  # ROLLBACK E STATUS
+  # ===================================================================
   rollback:
     name: 'Rollback'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, wait-aurora, configure-lambda, deploy-apps]
-    if: failure() && (needs.terraform-deploy.result == 'success')
+    needs: [terraform-foundation, terraform-compute, configure-lambda, deploy-apps]
+    if: failure() && (needs.terraform-foundation.result == 'success')
     defaults:
       run:
         working-directory: infra/terraform/envs/prod
@@ -550,7 +720,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -563,12 +733,12 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -backend-config="key=mana-food-prod.tfstate" \
-            -backend-config="region=us-east-1"
+            -backend-config="region=${{ env.AWS_REGION }}"
 
       - name: Cleanup EKS Apps
         run: |
           echo "🧹 Limpando aplicações do EKS..."
-          aws eks update-kubeconfig --region us-east-1 --name mana-food-eks || true
+          aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name mana-food-eks || true
           kubectl delete deployment mana-food-api mana-food-gateway || true
           kubectl delete service mana-food-api-service mana-food-gateway-service || true
           kubectl delete configmap mana-food-config || true
@@ -584,14 +754,14 @@ jobs:
       - name: Cleanup ECR Images
         run: |
           echo "🗑️ Limpando imagens ECR..."
-          aws ecr delete-repository --repository-name mana-food-gateway --force --region us-east-1 || true
-          aws ecr delete-repository --repository-name mana-food-api --force --region us-east-1 || true
+          aws ecr delete-repository --repository-name mana-food-gateway --force --region ${{ env.AWS_REGION }} || true
+          aws ecr delete-repository --repository-name mana-food-api --force --region ${{ env.AWS_REGION }} || true
         continue-on-error: true
 
   status:
     name: 'Status Final'
     runs-on: ubuntu-latest
-    needs: [terraform-deploy, build-apps, wait-aurora, configure-lambda, deploy-apps, rollback]
+    needs: [terraform-foundation, build-apps, wait-aurora, terraform-compute, configure-lambda, deploy-apps, rollback]
     if: always()
 
     steps:
@@ -599,9 +769,10 @@ jobs:
         run: |
           echo "🎯 MANA FOOD - ARQUITETURA OBRIGATÓRIA COM AWS SECRETS MANAGER"
           echo "=============================================================="
-          echo "Infraestrutura: ${{ needs.terraform-deploy.result }}"
+          echo "Foundation (VPC+Aurora): ${{ needs.terraform-foundation.result }}"
           echo "Build Apps: ${{ needs.build-apps.result }}"
           echo "Aurora Wait: ${{ needs.wait-aurora.result }}"
+          echo "Compute (EKS+Lambda): ${{ needs.terraform-compute.result }}"
           echo "Lambda Config: ${{ needs.configure-lambda.result }}"
           echo "Apps Deploy: ${{ needs.deploy-apps.result }}"
           echo "Rollback: ${{ needs.rollback.result }}"
@@ -634,6 +805,13 @@ jobs:
             echo "  • APENAS .NET 9 (sem Lambda Python)"
             echo "  • NÃO usou connection strings hardcoded"
             echo "  • NÃO usou setup via Docker externo"
+            echo ""
+            echo "⏱️ TIMELINE OTIMIZADA:"
+            echo "  Phase 1: Build Apps (3-5 min) | Foundation Deploy (parallel)"
+            echo "  Phase 2: Aurora Wait (15-20 min)"
+            echo "  Phase 3: EKS+Lambda Deploy (8-12 min)"
+            echo "  Phase 4: App Deploy (2-3 min)"
+            echo "  🎯 Total: ~25-30 min (vs 35-45 min anterior)"
           else
             echo "❌ Falha no deployment"
           fi
