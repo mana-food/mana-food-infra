@@ -38,6 +38,13 @@ module "eks" {
   }
 }
 
+# Data source para obter o ARN do secret de forma mais robusta
+data "aws_secretsmanager_secret" "aurora_secret" {
+  depends_on = [module.aurora]
+  arn        = module.aurora.cluster_master_user_secret[0].secret_arn
+}
+
+# Política IAM robusta para EKS nodes acessarem Secrets Manager
 resource "aws_iam_role_policy" "eks_nodes_secrets_manager" {
   name = "${var.project_name}-eks-nodes-secrets-policy"
   role = module.eks.eks_managed_node_groups["default"].iam_role_name
@@ -46,26 +53,45 @@ resource "aws_iam_role_policy" "eks_nodes_secrets_manager" {
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "AllowSecretsManagerAccess"
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue",
           "secretsmanager:DescribeSecret"
         ]
         Resource = [
-          module.aurora.cluster_master_user_secret[0].secret_arn,
-          "${module.aurora.cluster_master_user_secret[0].secret_arn}*"
+          data.aws_secretsmanager_secret.aurora_secret.arn,
+          "${data.aws_secretsmanager_secret.aurora_secret.arn}*",
+          "arn:aws:secretsmanager:${var.aws_region}:*:secret:rds!cluster-*"
         ]
+      },
+      {
+        Sid    = "AllowListSecrets"
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:ListSecrets"
+        ]
+        Resource = "*"
       }
     ]
   })
 
   depends_on = [
     module.eks,
-    module.aurora
+    module.aurora,
+    data.aws_secretsmanager_secret.aurora_secret
   ]
 }
 
-# Política adicional para logs CloudWatch (se necessário)
+# Política AWS managed adicional para Secrets Manager (backup)
+resource "aws_iam_role_policy_attachment" "eks_nodes_secrets_manager_managed" {
+  role       = module.eks.eks_managed_node_groups["default"].iam_role_name
+  policy_arn = "arn:aws:iam::aws:policy/SecretsManagerReadWrite"
+  
+  depends_on = [module.eks]
+}
+
+# Política para logs CloudWatch
 resource "aws_iam_role_policy_attachment" "eks_nodes_cloudwatch" {
   role       = module.eks.eks_managed_node_groups["default"].iam_role_name
   policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
