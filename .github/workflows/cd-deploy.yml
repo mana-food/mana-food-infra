@@ -374,6 +374,7 @@ jobs:
           data:
             ASPNETCORE_ENVIRONMENT: "Production"
             ASPNETCORE_URLS: "http://+:8080"
+            DATABASE_HOST: "$AURORA_ENDPOINT"
           ---
           # API .NET 9 Deployment (aplica migrations automaticamente)
           apiVersion: apps/v1
