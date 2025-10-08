@@ -175,6 +175,7 @@ jobs:
       aurora-endpoint: ${{ steps.outputs.outputs.aurora-endpoint }}
       aurora-secret-arn: ${{ steps.outputs.outputs.aurora-secret-arn }}
       lambda-function-name: ${{ steps.outputs.outputs.lambda-function-name }}
+      lambda-api-url: ${{ steps.outputs.outputs.lambda-api-url }}
 
     steps:
       - name: Checkout
@@ -219,14 +220,17 @@ jobs:
           AURORA_ENDPOINT=$(terraform output -raw aurora_endpoint)
           AURORA_SECRET_ARN=$(terraform output -raw aurora_secret_arn)
           LAMBDA_FUNCTION_NAME=$(terraform output -raw lambda_function_name)
+          LAMBDA_API_URL=$(terraform output -raw lambda_api_url)
           
           echo "aurora-endpoint=$AURORA_ENDPOINT" >> $GITHUB_OUTPUT
           echo "aurora-secret-arn=$AURORA_SECRET_ARN" >> $GITHUB_OUTPUT
           echo "lambda-function-name=$LAMBDA_FUNCTION_NAME" >> $GITHUB_OUTPUT
+          echo "lambda-api-url=$LAMBDA_API_URL" >> $GITHUB_OUTPUT
           
           echo "✅ Aurora Endpoint: $AURORA_ENDPOINT"
           echo "🔐 Aurora Secret ARN: $AURORA_SECRET_ARN"
           echo "⚡ Lambda Function: $LAMBDA_FUNCTION_NAME"
+          echo "🌐 Lambda API URL: $LAMBDA_API_URL"
 
   wait-aurora:
     name: 'Aguardar Aurora Disponível'
@@ -375,6 +379,8 @@ jobs:
             ASPNETCORE_ENVIRONMENT: "Production"
             ASPNETCORE_URLS: "http://+:8080"
             DATABASE_HOST: "$AURORA_ENDPOINT"
+            API_BASE_URL: "http://mana-food-api-service:8080"
+            LAMBDA_URL: "${{ needs.terraform-deploy.outputs.lambda-api-url }}"
           ---
           # API .NET 9 Deployment (aplica migrations automaticamente)
           apiVersion: apps/v1
@@ -448,14 +454,7 @@ jobs:
                   image: $GATEWAY_IMAGE
                   ports:
                   - containerPort: 8080
-                  env:
-                  - name: LambdaAuthUrl
-                    valueFrom:
-                      secretKeyRef:
-                        name: mana-food-secrets
-                        key: lambda-auth-url
-                  - name: ApiUrl
-                    value: "http://mana-food-api-service:80"
+                  env: []
                   envFrom:
                   - configMapRef:
                       name: mana-food-config
@@ -477,7 +476,7 @@ jobs:
             selector:
               app: mana-food-api
             ports:
-            - port: 80
+            - port: 8080
               targetPort: 8080
             type: ClusterIP
           ---
