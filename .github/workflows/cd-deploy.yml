@@ -92,7 +92,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: sa-east-1
+          aws-region: us-east-1
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -100,11 +100,11 @@ jobs:
 
       - name: Create ECR repositories
         run: |
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_GATEWAY --region sa-east-1 || \
-          aws ecr create-repository --repository-name $ECR_REPOSITORY_GATEWAY --region sa-east-1
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_GATEWAY --region us-east-1 || \
+          aws ecr create-repository --repository-name $ECR_REPOSITORY_GATEWAY --region us-east-1
           
-          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_API --region sa-east-1 || \
-          aws ecr create-repository --repository-name $ECR_REPOSITORY_API --region sa-east-1
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY_API --region us-east-1 || \
+          aws ecr create-repository --repository-name $ECR_REPOSITORY_API --region us-east-1
 
       - name: Build Gateway .NET 9
         id: build-gateway
@@ -186,7 +186,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: sa-east-1
+          aws-region: us-east-1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -205,7 +205,7 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -backend-config="key=mana-food-prod.tfstate" \
-            -backend-config="region=sa-east-1"
+            -backend-config="region=us-east-1"
 
       - name: Terraform Apply
         id: apply
@@ -244,7 +244,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: sa-east-1
+          aws-region: us-east-1
 
       - name: Wait for Aurora availability
         run: |
@@ -252,7 +252,7 @@ jobs:
           
           timeout 600 bash -c "
             while true; do
-              STATUS=\$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region sa-east-1 --query 'DBClusters[0].Status' --output text 2>/dev/null || echo 'unknown')
+              STATUS=\$(aws rds describe-db-clusters --db-cluster-identifier mana-food-aurora --region us-east-1 --query 'DBClusters[0].Status' --output text 2>/dev/null || echo 'unknown')
               if [ \"\$STATUS\" = \"available\" ]; then
                 echo \"✅ Aurora disponível!\"
                 break
@@ -269,7 +269,7 @@ jobs:
           echo "Secret ARN: $SECRET_ARN"
           
           # Testar acesso ao secret
-          aws secretsmanager describe-secret --secret-id "$SECRET_ARN" --region sa-east-1
+          aws secretsmanager describe-secret --secret-id "$SECRET_ARN" --region us-east-1
           echo "✅ AWS Secrets Manager configurado corretamente"
 
   configure-lambda:
@@ -283,7 +283,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: sa-east-1
+          aws-region: us-east-1
 
       - name: Configure Lambda with Secrets Manager
         shell: bash
@@ -305,17 +305,17 @@ jobs:
           ENV_VARS="AURORA_SECRET_ARN=$AURORA_SECRET_ARN,ASPNETCORE_ENVIRONMENT=Production"
           aws lambda update-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
-            --region sa-east-1 \
+            --region us-east-1 \
             --environment "Variables={$ENV_VARS}"
 
           echo "⏳ Aguardando atualização..."
-          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region sa-east-1
+          aws lambda wait function-updated --function-name "$LAMBDA_FUNCTION_NAME" --region us-east-1
 
           echo "✅ Lambda atualizada. Variáveis aplicadas:"
           aws lambda get-function-configuration \
             --function-name "$LAMBDA_FUNCTION_NAME" \
             --query 'Environment.Variables' \
-            --region sa-east-1
+            --region us-east-1
 
   deploy-apps:
     name: 'Deploy Gateway & API .NET 9 no EKS'
@@ -329,14 +329,14 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: sa-east-1
+          aws-region: us-east-1
 
       - name: Setup kubectl
         uses: azure/setup-kubectl@v3
 
       - name: Deploy aplicações .NET 9 no EKS
         run: |
-          aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks
+          aws eks update-kubeconfig --region us-east-1 --name mana-food-eks
           
           # Configurações
           GATEWAY_IMAGE="${{ needs.build-apps.outputs.gateway-image }}"
@@ -346,7 +346,7 @@ jobs:
           
           # Obter URL da Lambda de autenticação
           API_ID=$(aws apigateway get-rest-apis --query 'items[?name==`mana-food-api`].id' --output text)
-          LAMBDA_AUTH_URL="https://$API_ID.execute-api.sa-east-1.amazonaws.com/prod"
+          LAMBDA_AUTH_URL="https://$API_ID.execute-api.us-east-1.amazonaws.com/prod"
           
           echo "🚀 Deployando ManaFood .NET 9 no EKS com AWS Secrets Manager..."
           echo "🌐 Gateway .NET 9: $GATEWAY_IMAGE"
@@ -550,7 +550,7 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: sa-east-1
+          aws-region: us-east-1
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -563,12 +563,12 @@ jobs:
           terraform init \
             -backend-config="bucket=${{ secrets.AWS_TF_STATE_BUCKET }}" \
             -backend-config="key=mana-food-prod.tfstate" \
-            -backend-config="region=sa-east-1"
+            -backend-config="region=us-east-1"
 
       - name: Cleanup EKS Apps
         run: |
           echo "🧹 Limpando aplicações do EKS..."
-          aws eks update-kubeconfig --region sa-east-1 --name mana-food-eks || true
+          aws eks update-kubeconfig --region us-east-1 --name mana-food-eks || true
           kubectl delete deployment mana-food-api mana-food-gateway || true
           kubectl delete service mana-food-api-service mana-food-gateway-service || true
           kubectl delete configmap mana-food-config || true
@@ -584,8 +584,8 @@ jobs:
       - name: Cleanup ECR Images
         run: |
           echo "🗑️ Limpando imagens ECR..."
-          aws ecr delete-repository --repository-name mana-food-gateway --force --region sa-east-1 || true
-          aws ecr delete-repository --repository-name mana-food-api --force --region sa-east-1 || true
+          aws ecr delete-repository --repository-name mana-food-gateway --force --region us-east-1 || true
+          aws ecr delete-repository --repository-name mana-food-api --force --region us-east-1 || true
         continue-on-error: true
 
   status:

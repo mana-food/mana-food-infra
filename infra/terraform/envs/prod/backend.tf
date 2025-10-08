@@ -1,8 +1,8 @@
 terraform {
   backend "s3" {
-    bucket  = "manafood-bucket-terraform-tfstate"
+    bucket  = "manafood"
     key     = "mana-food-prod.tfstate"
-    region  = "sa-east-1"
+    region  = "us-east-1"
     encrypt = true
   }
 }
