@@ -225,9 +225,14 @@ jobs:
         run: |
           AURORA_ENDPOINT=$(terraform output -raw aurora_endpoint)
           AURORA_SECRET_ARN=$(terraform output -raw aurora_secret_arn)
+          LAMBDA_API_URL=$(terraform output -raw lambda_api_url || echo "")
           
           echo "aurora-endpoint=$AURORA_ENDPOINT" >> $GITHUB_OUTPUT
           echo "aurora-secret-arn=$AURORA_SECRET_ARN" >> $GITHUB_OUTPUT
+          if [ -n "$LAMBDA_API_URL" ]; then
+            echo "lambda-api-url=$LAMBDA_API_URL" >> $GITHUB_OUTPUT
+            echo "⚡ Lambda API URL: $LAMBDA_API_URL"
+          fi
           
           echo "✅ Aurora Endpoint: $AURORA_ENDPOINT"
           echo "🔐 Aurora Secret ARN: $AURORA_SECRET_ARN"
