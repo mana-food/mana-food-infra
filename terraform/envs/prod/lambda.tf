@@ -81,12 +81,12 @@ resource "aws_lambda_function" "auth" {
 
   environment {
     variables = {
-      AWS_REGION                = var.aws_region
       ASPNETCORE_ENVIRONMENT    = "Production"
       Jwt__SecretKey            = var.jwt_secret_key
       Jwt__Issuer               = "ManaFood"
       Jwt__Audience             = "ManaFoodUsers"
       Jwt__ExpirationMinutes    = "60"
+      DYNAMODB_TABLE_NAME       = aws_dynamodb_table.users.name
     }
   }
 
@@ -96,7 +96,8 @@ resource "aws_lambda_function" "auth" {
 
   depends_on = [
     aws_iam_role_policy_attachment.lambda_auth_basic,
-    aws_cloudwatch_log_group.lambda_auth_logs
+    aws_cloudwatch_log_group.lambda_auth_logs,
+    aws_dynamodb_table.users
   ]
 }
 
