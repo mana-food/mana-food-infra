@@ -54,6 +54,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: lambda-${{ github.run_id }}
+          path: terraform/envs/prod
 
       - name: Init
         run: terraform init
