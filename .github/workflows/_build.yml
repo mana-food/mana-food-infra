@@ -46,7 +46,21 @@ jobs:
       user-service: ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}
     
     steps:
-      - uses: actions/checkout@v4
+      # Checkout Gateway
+      - name: Checkout Gateway
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-api-gateway
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: gateway
+
+      # Checkout User Service
+      - name: Checkout User Service
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservico-usuario
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: user-service
 
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
