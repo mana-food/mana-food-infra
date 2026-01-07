@@ -20,7 +20,7 @@ output "lambda_function_name" {
 
 output "lambda_auth_url" {
   description = "Lambda Auth API Gateway URL"
-  value       = "${aws_api_gateway_stage.lambda_auth_stage.invoke_url}/api/auth/login"
+  value       = aws_api_gateway_stage.lambda_auth_stage.invoke_url
 }
 
 output "dynamodb_users_table_name" {
