@@ -53,6 +53,19 @@ jobs:
           name: lambda-${{ github.run_id }}
           path: terraform/envs/prod
 
+      - name: Setup S3 Backend
+        run: |          
+          # Criar tabela DynamoDB se não existir
+          aws dynamodb describe-table --table-name terraform-state-lock --region us-east-1 2>/dev/null || \
+          aws dynamodb create-table \
+            --table-name terraform-state-lock \
+            --attribute-definitions AttributeName=LockID,AttributeType=S \
+            --key-schema AttributeName=LockID,KeyType=HASH \
+            --billing-mode PAY_PER_REQUEST \
+            --region us-east-1
+          
+          echo "DynamoDB table ready"
+
       - name: Init
         working-directory: terraform/envs/prod
         run: terraform init
