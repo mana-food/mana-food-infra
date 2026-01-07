@@ -40,11 +40,12 @@ resource "aws_iam_role_policy" "lambda_auth_dynamodb_policy" {
         Effect = "Allow"
         Action = [
           "dynamodb:GetItem",
-          "dynamodb:Query"
+          "dynamodb:Query",
+          "dynamodb:DescribeTable"
         ]
         Resource = [
           aws_dynamodb_table.users.arn,
-          "${aws_dynamodb_table.users.arn}/index/CpfIndex"
+          "${aws_dynamodb_table.users.arn}/index/*"
         ]
       }
     ]
