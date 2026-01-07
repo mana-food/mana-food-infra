@@ -22,9 +22,6 @@ jobs:
   apply:
     name: ${{ inputs.action == 'apply' && 'Apply' || 'Destroy' }}
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: terraform/envs/prod
     
     outputs:
       eks-cluster: ${{ steps.output.outputs.eks }}
@@ -57,9 +54,11 @@ jobs:
           path: terraform/envs/prod
 
       - name: Init
+        working-directory: terraform/envs/prod
         run: terraform init
 
       - name: ${{ inputs.action }}
+        working-directory: terraform/envs/prod
         run: |
           terraform ${{ inputs.action }} \
             -var="jwt_secret_key=${{ secrets.JWT_SECRET }}" \
@@ -68,6 +67,7 @@ jobs:
       - name: Outputs
         id: output
         if: inputs.action == 'apply'
+        working-directory: terraform/envs/prod
         run: |
           echo "eks=$(terraform output -raw eks_cluster_name)" >> $GITHUB_OUTPUT
           echo "lambda=$(terraform output -raw lambda_function_name)" >> $GITHUB_OUTPUT
