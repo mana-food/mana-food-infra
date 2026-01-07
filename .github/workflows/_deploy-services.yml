@@ -98,6 +98,32 @@ jobs:
             --region us-east-1 \
             --name ${{ inputs.eks-cluster }}
 
+      - name: Verify Images Exist
+        run: |
+          echo "Verifying images in ECR..."
+          
+          # Verificar Gateway
+          aws ecr describe-images \
+            --repository-name mana-food-gateway \
+            --image-ids imageTag=$(echo "${{ inputs.gateway-image }}" | cut -d':' -f2) \
+            --region us-east-1 || {
+              echo "ERROR: Gateway image not found in ECR!"
+              echo "Expected: ${{ inputs.gateway-image }}"
+              exit 1
+            }
+          
+          # Verificar User Service
+          aws ecr describe-images \
+            --repository-name mana-food-user-service \
+            --image-ids imageTag=$(echo "${{ inputs.user-service-image }}" | cut -d':' -f2) \
+            --region us-east-1 || {
+              echo "ERROR: User Service image not found in ECR!"
+              echo "Expected: ${{ inputs.user-service-image }}"
+              exit 1
+            }
+          
+          echo "✅ All images found in ECR"
+
       - name: Deploy Manifests
         run: |
           kubectl apply -f - <<EOF
