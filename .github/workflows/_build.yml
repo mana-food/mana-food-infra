@@ -29,6 +29,8 @@ jobs:
         run: |
           dotnet publish src/ManaFood.AuthLambda \
             -c Release -r linux-x64 --self-contained -o publish
+          chmod +x publish/ManaFood.AuthLambda
+          mv publish/ManaFood.AuthLambda publish/bootstrap
           cd publish && zip -r ../lambda.zip .
 
       - name: Upload
