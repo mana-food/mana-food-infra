@@ -1,0 +1,213 @@
+name: Deploy Services
+
+on:
+  workflow_call:
+    inputs:
+      lambda-artifact:
+        required: true
+        type: string
+      gateway-image:
+        required: true
+        type: string
+      user-service-image:
+        required: true
+        type: string
+      lambda-function:
+        required: true
+        type: string
+      lambda-url:
+        required: true
+        type: string
+      eks-cluster:
+        required: true
+        type: string
+      dynamodb-table:
+        required: true
+        type: string
+      user-service-role:
+        required: true
+        type: string
+    outputs:
+      gateway-url:
+        value: ${{ jobs.k8s.outputs.url }}
+
+jobs:
+  # ==========================================
+  # LAMBDA AUTH
+  # ==========================================
+  lambda:
+    name: Lambda Auth
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Download Package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.lambda-artifact }}
+
+      - name: Update Function
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ inputs.lambda-function }} \
+            --zip-file fileb://lambda.zip
+          
+          aws lambda wait function-updated \
+            --function-name ${{ inputs.lambda-function }}
+
+      - name: Update Config
+        run: |
+          aws lambda update-function-configuration \
+            --function-name ${{ inputs.lambda-function }} \
+            --environment "Variables={
+              ASPNETCORE_ENVIRONMENT=Production,
+              Jwt__SecretKey=${{ secrets.JWT_SECRET }},
+              Jwt__Issuer=ManaFood,
+              Jwt__Audience=ManaFoodUsers,
+              Jwt__ExpirationMinutes=60
+            }"
+
+  # ==========================================
+  # KUBERNETES
+  # ==========================================
+  k8s:
+    name: Kubernetes Apps
+    needs: lambda
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.lb.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Setup kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name ${{ inputs.eks-cluster }}
+
+      - name: Deploy Manifests
+        run: |
+          kubectl apply -f - <<EOF
+          ---
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: gateway-config
+          data:
+            AUTH_LAMBDA_URL: ${{ inputs.lambda-url }}
+          ---
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: jwt-secret
+          stringData:
+            JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          ---
+          apiVersion: v1
+          kind: ServiceAccount
+          metadata:
+            name: user-service-sa
+            annotations:
+              eks.amazonaws.com/role-arn: ${{ inputs.user-service-role }}
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: api-gateway
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: api-gateway
+            template:
+              metadata:
+                labels:
+                  app: api-gateway
+              spec:
+                containers:
+                - name: gateway
+                  image: ${{ inputs.gateway-image }}
+                  ports:
+                  - containerPort: 8080
+                  envFrom:
+                  - configMapRef:
+                      name: gateway-config
+                  - secretRef:
+                      name: jwt-secret
+          ---
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: user-service
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: user-service
+            template:
+              metadata:
+                labels:
+                  app: user-service
+              spec:
+                serviceAccountName: user-service-sa
+                containers:
+                - name: user-service
+                  image: ${{ inputs.user-service-image }}
+                  ports:
+                  - containerPort: 8080
+                  env:
+                  - name: AWS_REGION
+                    value: us-east-1
+                  envFrom:
+                  - secretRef:
+                      name: jwt-secret
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: api-gateway
+          spec:
+            selector:
+              app: api-gateway
+            ports:
+            - port: 80
+              targetPort: 8080
+            type: LoadBalancer
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: user-service
+          spec:
+            selector:
+              app: user-service
+            ports:
+            - port: 80
+              targetPort: 8080
+            type: ClusterIP
+          EOF
+
+      - name: Wait Rollout
+        run: |
+          kubectl rollout status deployment/api-gateway --timeout=300s
+          kubectl rollout status deployment/user-service --timeout=300s
+
+      - name: Get URL
+        id: lb
+        run: |
+          URL=$(kubectl get svc api-gateway \
+            -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          echo "url=http://$URL" >> $GITHUB_OUTPUT

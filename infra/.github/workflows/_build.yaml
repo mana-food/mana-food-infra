@@ -1,0 +1,70 @@
+name: Build Services
+
+on:
+  workflow_call:
+    outputs:
+      lambda-artifact:
+        value: lambda-${{ github.run_id }}
+      gateway-image:
+        value: ${{ jobs.containers.outputs.gateway }}
+      user-service-image:
+        value: ${{ jobs.containers.outputs.user-service }}
+
+jobs:
+  lambda:
+    name: Lambda Auth
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: mana-food/lambda-auth
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Build & Package
+        run: |
+          dotnet publish src/ManaFood.AuthLambda \
+            -c Release -r linux-x64 --self-contained -o publish
+          cd publish && zip -r ../lambda.zip .
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: lambda-${{ github.run_id }}
+          path: lambda.zip
+          retention-days: 1
+
+  containers:
+    name: Container Images
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }}
+      user-service: ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & Push Images
+        run: |
+          # Gateway
+          docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }} ./gateway
+          docker push ${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }}
+          
+          # User Service
+          docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }} ./user-service
+          docker push ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}

@@ -1,0 +1,65 @@
+name: Deploy ManaFood Microservices
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment'
+        type: choice
+        options: [dev, prod]
+        default: 'dev'
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-1
+  ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
+
+jobs:
+  # ==========================================
+  # STAGE 1: BUILD (Parallel)
+  # ==========================================
+  build:
+    name: Build All Services
+    uses: ./.github/workflows/_build.yml
+    secrets: inherit
+
+  # ==========================================
+  # STAGE 2: INFRASTRUCTURE
+  # ==========================================
+  infra:
+    name: Deploy Infrastructure
+    needs: build
+    uses: ./.github/workflows/_terraform.yml
+    secrets: inherit
+    with:
+      action: apply
+
+  # ==========================================
+  # STAGE 3: DEPLOY SERVICES
+  # ==========================================
+  deploy:
+    name: Deploy Services
+    needs: [build, infra]
+    uses: ./.github/workflows/_deploy-services.yml
+    secrets: inherit
+    with:
+      lambda-artifact: ${{ needs.build.outputs.lambda-artifact }}
+      gateway-image: ${{ needs.build.outputs.gateway-image }}
+      user-service-image: ${{ needs.build.outputs.user-service-image }}
+      lambda-function: ${{ needs.infra.outputs.lambda-function }}
+      lambda-url: ${{ needs.infra.outputs.lambda-url }}
+      eks-cluster: ${{ needs.infra.outputs.eks-cluster }}
+      dynamodb-table: ${{ needs.infra.outputs.dynamodb-table }}
+      user-service-role: ${{ needs.infra.outputs.user-service-role }}
+
+  # ==========================================
+  # STAGE 4: SMOKE TESTS
+  # ==========================================
+  test:
+    name: Smoke Tests
+    needs: deploy
+    uses: ./.github/workflows/_smoke-tests.yml
+    secrets: inherit
+    with:
+      gateway-url: ${{ needs.deploy.outputs.gateway-url }}

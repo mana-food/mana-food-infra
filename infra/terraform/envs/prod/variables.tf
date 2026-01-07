@@ -15,3 +15,9 @@ variable "bucket_state_name" {
   type        = string
   sensitive   = true
 }
+
+variable "jwt_secret_key" {
+  description = "JWT Secret Key (256 bits minimum)"
+  type        = string
+  sensitive   = true
+}

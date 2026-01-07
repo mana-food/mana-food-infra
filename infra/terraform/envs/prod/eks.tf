@@ -12,6 +12,8 @@ module "eks" {
 
   enable_cluster_creator_admin_permissions = true
 
+  enable_irsa = true
+
   cluster_addons = {
     coredns = {
       most_recent = true
@@ -30,11 +32,19 @@ module "eks" {
       min_size       = 1
       max_size       = 3
       desired_size   = 2
+
+    metadata_options = {
+      http_endpoint               = "enabled"
+      http_tokens                 = "required"
+      http_put_response_hop_limit = 1
+
+      }
     }
   }
 
   tags = {
     Name = "${var.project_name}-eks"
+    Environment = "production"
   }
 }
 
