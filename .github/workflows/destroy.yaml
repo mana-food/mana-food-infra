@@ -27,7 +27,7 @@ jobs:
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.6.0
-          terraform_wrapper: false  
+          terraform_wrapper: false
 
       - name: Terraform Init
         working-directory: terraform/envs/prod
@@ -59,6 +59,7 @@ jobs:
         run: |
           terraform destroy \
             -var="jwt_secret_key=${{ secrets.JWT_SECRET }}" \
+            -var="bucket_state_name=${{ secrets.TERRAFORM_STATE_BUCKET }}" \
             -auto-approve
 
       - name: Cleanup ECR
