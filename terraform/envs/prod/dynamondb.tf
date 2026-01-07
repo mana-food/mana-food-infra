@@ -99,7 +99,8 @@ resource "aws_iam_role_policy" "user_service_dynamodb_policy" {
           "dynamodb:Query",
           "dynamodb:Scan",
           "dynamodb:BatchGetItem",
-          "dynamodb:BatchWriteItem"
+          "dynamodb:BatchWriteItem",
+          "dynamodb:DescribeTable" 
         ]
         Resource = [
           aws_dynamodb_table.users.arn,
