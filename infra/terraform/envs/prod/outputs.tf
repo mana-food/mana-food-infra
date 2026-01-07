@@ -13,6 +13,31 @@ output "eks_cluster_endpoint" {
   value       = module.eks.cluster_endpoint
 }
 
+output "lambda_auth_url" {
+  description = "Lambda Auth API Gateway URL"
+  value       = "${aws_api_gateway_stage.lambda_auth_stage.invoke_url}/api/auth/login"
+}
+
+output "dynamodb_users_table_name" {
+  description = "DynamoDB Users table name"
+  value       = aws_dynamodb_table.users.name
+}
+
+output "dynamodb_users_table_arn" {
+  description = "DynamoDB Users table ARN"
+  value       = aws_dynamodb_table.users.arn
+}
+
+output "user_service_iam_role_arn" {
+  description = "IAM Role ARN for User Service"
+  value       = aws_iam_role.user_service_dynamodb.arn
+}
+
+output "api_gateway_load_balancer" {
+  description = "API Gateway Load Balancer URL (after kubectl apply)"
+  value       = "Run: kubectl get svc api-gateway -o jsonpath='{.status.loadBalancer.ingress[0].hostname}'"
+}
+
 output "eks_cluster_version" {
   description = "Versão do cluster EKS"
   value       = module.eks.cluster_version
@@ -40,21 +65,6 @@ output "aurora_secret_arn" {
   sensitive   = true
 }
 
-# Lambda Outputs
-output "lambda_function_name" {
-  description = "Nome da função Lambda"
-  value       = aws_lambda_function.api.function_name
-}
-
-output "lambda_function_arn" {
-  description = "ARN da função Lambda"
-  value       = aws_lambda_function.api.arn
-}
-
-output "lambda_api_url" {
-  description = "URL da API Gateway para Lambda"
-  value       = "https://${aws_api_gateway_rest_api.lambda_api.id}.execute-api.${var.aws_region}.amazonaws.com/${aws_api_gateway_stage.lambda_stage.stage_name}"
-}
 
 # VPC Outputs
 output "vpc_id" {

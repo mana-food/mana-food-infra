@@ -1,0 +1,75 @@
+name: Terraform
+
+on:
+  workflow_call:
+    inputs:
+      action:
+        required: true
+        type: string
+    outputs:
+      eks-cluster:
+        value: ${{ jobs.apply.outputs.eks-cluster }}
+      lambda-function:
+        value: ${{ jobs.apply.outputs.lambda-function }}
+      lambda-url:
+        value: ${{ jobs.apply.outputs.lambda-url }}
+      dynamodb-table:
+        value: ${{ jobs.apply.outputs.dynamodb-table }}
+      user-service-role:
+        value: ${{ jobs.apply.outputs.user-service-role }}
+
+jobs:
+  apply:
+    name: ${{ inputs.action == 'apply' && 'Apply' || 'Destroy' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/envs/prod
+    
+    outputs:
+      eks-cluster: ${{ steps.output.outputs.eks }}
+      lambda-function: ${{ steps.output.outputs.lambda }}
+      lambda-url: ${{ steps.output.outputs.lambda-url }}
+      dynamodb-table: ${{ steps.output.outputs.dynamodb }}
+      user-service-role: ${{ steps.output.outputs.role }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Download Lambda
+        if: inputs.action == 'apply'
+        uses: actions/download-artifact@v4
+        with:
+          name: lambda-${{ github.run_id }}
+
+      - name: Init
+        run: terraform init
+
+      - name: ${{ inputs.action }}
+        run: |
+          terraform ${{ inputs.action }} \
+            -var="jwt_secret_key=${{ secrets.JWT_SECRET }}" \
+            -auto-approve
+
+      - name: Outputs
+        id: output
+        if: inputs.action == 'apply'
+        run: |
+          echo "eks=$(terraform output -raw eks_cluster_name)" >> $GITHUB_OUTPUT
+          echo "lambda=$(terraform output -raw lambda_function_name)" >> $GITHUB_OUTPUT
+          echo "lambda-url=$(terraform output -raw lambda_auth_url)" >> $GITHUB_OUTPUT
+          echo "dynamodb=$(terraform output -raw dynamodb_users_table_name)" >> $GITHUB_OUTPUT
+          echo "role=$(terraform output -raw user_service_iam_role_arn)" >> $GITHUB_OUTPUT
