@@ -23,9 +23,27 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false  
+
+      - name: Terraform Init
+        working-directory: terraform/envs/prod
+        run: terraform init
+
+      - name: Get Cluster Name
+        id: cluster
+        working-directory: terraform/envs/prod
+        run: |
+          CLUSTER_NAME=$(terraform output -raw eks_cluster_name 2>/dev/null || echo "mana-food-eks")
+          echo "name=$CLUSTER_NAME" >> $GITHUB_OUTPUT
+          echo "Cluster name: $CLUSTER_NAME"
+
       - name: Setup kubectl
         run: |
-          aws eks update-kubeconfig --region us-east-1 --name $(cd terraform/envs/prod && terraform output -raw eks_cluster_name || echo "mana-food-eks-prod")
+          aws eks update-kubeconfig --region us-east-1 --name ${{ steps.cluster.outputs.name }}
 
       - name: Delete K8s Resources
         run: |
@@ -33,17 +51,12 @@ jobs:
           kubectl delete service --all -n default || true
           kubectl delete configmap --all -n default || true
           kubectl delete secret --all -n default || true
+          kubectl delete serviceaccount --all -n default || true
           sleep 30
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.0
 
       - name: Terraform Destroy
         working-directory: terraform/envs/prod
         run: |
-          terraform init
           terraform destroy \
             -var="jwt_secret_key=${{ secrets.JWT_SECRET }}" \
             -auto-approve
