@@ -69,6 +69,15 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
+      # Criar repositórios ECR se não existirem
+      - name: Create ECR Repositories
+        run: |
+          aws ecr describe-repositories --repository-names mana-food-gateway --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-gateway --region us-east-1
+          
+          aws ecr describe-repositories --repository-names mana-food-user-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-user-service --region us-east-1
+
       - name: Login to ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
