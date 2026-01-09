@@ -2,6 +2,25 @@ name: Build Services
 
 on:
   workflow_call:
+    inputs:
+      force-build-gateway:
+        type: boolean
+        default: false
+      force-build-user-service:
+        type: boolean
+        default: false
+      force-build-order-service:
+        type: boolean
+        default: false
+      force-build-product-service:
+        type: boolean
+        default: false
+      force-build-payment-service:
+        type: boolean
+        default: false
+      force-build-lambda:
+        type: boolean
+        default: false
     outputs:
       lambda-artifact:
         value: lambda-${{ github.run_id }}
@@ -17,9 +36,72 @@ on:
         value: ${{ jobs.containers.outputs.payment-service }}
 
 jobs:
+  # ==========================================
+  # DETECT CHANGES
+  # ==========================================
+  detect-changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+    outputs:
+      gateway: ${{ steps.changes.outputs.gateway }}
+      user-service: ${{ steps.changes.outputs.user-service }}
+      order-service: ${{ steps.changes.outputs.order-service }}
+      product-service: ${{ steps.changes.outputs.product-service }}
+      payment-service: ${{ steps.changes.outputs.payment-service }}
+      lambda: ${{ steps.changes.outputs.lambda }}
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Detect Changes
+        id: changes
+        run: |
+          # Check if images exist in ECR with current commit
+          if aws ecr describe-images --repository-name mana-food-gateway --region us-east-1 --image-ids imageTag=${{ github.sha }} 2>/dev/null; then
+            echo "gateway=false" >> $GITHUB_OUTPUT
+          else
+            echo "gateway=true" >> $GITHUB_OUTPUT
+          fi
+          
+          if aws ecr describe-images --repository-name mana-food-user-service --region us-east-1 --image-ids imageTag=${{ github.sha }} 2>/dev/null; then
+            echo "user-service=false" >> $GITHUB_OUTPUT
+          else
+            echo "user-service=true" >> $GITHUB_OUTPUT
+          fi
+          
+          if aws ecr describe-images --repository-name mana-food-order-service --region us-east-1 --image-ids imageTag=${{ github.sha }} 2>/dev/null; then
+            echo "order-service=false" >> $GITHUB_OUTPUT
+          else
+            echo "order-service=true" >> $GITHUB_OUTPUT
+          fi
+          
+          if aws ecr describe-images --repository-name mana-food-product-service --region us-east-1 --image-ids imageTag=${{ github.sha }} 2>/dev/null; then
+            echo "product-service=false" >> $GITHUB_OUTPUT
+          else
+            echo "product-service=true" >> $GITHUB_OUTPUT
+          fi
+          
+          if aws ecr describe-images --repository-name mana-food-payment-service --region us-east-1 --image-ids imageTag=${{ github.sha }} 2>/dev/null; then
+            echo "payment-service=false" >> $GITHUB_OUTPUT
+          else
+            echo "payment-service=true" >> $GITHUB_OUTPUT
+          fi
+          
+          # Lambda always build for now
+          echo "lambda=true" >> $GITHUB_OUTPUT
+
+  # ==========================================
+  # LAMBDA BUILD
+  # ==========================================
   lambda:
     name: Lambda Auth
     runs-on: ubuntu-latest
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.lambda == 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,58 +128,21 @@ jobs:
           path: lambda.zip
           retention-days: 1
 
+  # ==========================================
+  # CONTAINER BUILDS
+  # ==========================================
   containers:
     name: Container Images
     runs-on: ubuntu-latest
+    needs: [detect-changes]
     outputs:
-      gateway: ${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }}
-      user-service: ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}
-      order-service: ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}
-      product-service: ${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }}
-      payment-service: ${{ steps.ecr.outputs.registry }}/mana-food-payment-service:${{ github.sha }}
+      gateway: ${{ steps.images.outputs.gateway }}
+      user-service: ${{ steps.images.outputs.user-service }}
+      order-service: ${{ steps.images.outputs.order-service }}
+      product-service: ${{ steps.images.outputs.product-service }}
+      payment-service: ${{ steps.images.outputs.payment-service }}
     
     steps:
-      # Checkout Gateway
-      - name: Checkout Gateway
-        uses: actions/checkout@v4
-        with:
-          repository: mana-food/mana-food-api-gateway
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
-          path: gateway
-
-      # Checkout User Service
-      - name: Checkout User Service
-        uses: actions/checkout@v4
-        with:
-          repository: mana-food/mana-food-microsservico-usuario
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
-          path: user-service
-
-      # Checkout Order Service
-      - name: Checkout Order Service
-        if: false
-        uses: actions/checkout@v4
-        with:
-          repository: mana-food/mana-food-microsservice-order
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
-          path: order-service
-
-      # Checkout Product Service
-      - name: Checkout Product Service
-        uses: actions/checkout@v4
-        with:
-          repository: mana-food/mana-food-microsservice-produto-app
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
-          path: product-service
-
-      # Checkout Payment Service
-      - name: Checkout Payment Service
-        uses: actions/checkout@v4
-        with:
-          repository: mana-food/mana-food-microsservico-pagamento
-          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
-          path: payment-service
-
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -105,51 +150,133 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: us-east-1
 
-      # Criar repositórios ECR
-      - name: Create ECR Repositories
-        run: |
-          # Gateway
-          aws ecr describe-repositories --repository-names mana-food-gateway --region us-east-1 2>/dev/null || \
-          aws ecr create-repository --repository-name mana-food-gateway --region us-east-1
-          
-          # User Service
-          aws ecr describe-repositories --repository-names mana-food-user-service --region us-east-1 2>/dev/null || \
-          aws ecr create-repository --repository-name mana-food-user-service --region us-east-1
-          
-          # Order Service
-          # aws ecr describe-repositories --repository-names mana-food-order-service --region us-east-1 2>/dev/null || \
-          # aws ecr create-repository --repository-name mana-food-order-service --region us-east-1
-          
-          # Product Service
-          aws ecr describe-repositories --repository-names mana-food-product-service --region us-east-1 2>/dev/null || \
-          aws ecr create-repository --repository-name mana-food-product-service --region us-east-1
-          
-          # Payment Service
-          aws ecr describe-repositories --repository-names mana-food-payment-service --region us-east-1 2>/dev/null || \
-          aws ecr create-repository --repository-name mana-food-payment-service --region us-east-1
-
       - name: Login to ECR
         id: ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build & Push Images
+      # ==========================================
+      # GATEWAY
+      # ==========================================
+      - name: Checkout Gateway
+        if: needs.detect-changes.outputs.gateway == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-api-gateway
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: gateway
+
+      - name: Create Gateway ECR
+        if: needs.detect-changes.outputs.gateway == 'true'
         run: |
-          # Gateway
+          aws ecr describe-repositories --repository-names mana-food-gateway --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-gateway --region us-east-1
+
+      - name: Build & Push Gateway
+        if: needs.detect-changes.outputs.gateway == 'true'
+        run: |
           docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }} ./gateway
           docker push ${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }}
-          
-          # User Service
+
+      # ==========================================
+      # USER SERVICE
+      # ==========================================
+      - name: Checkout User Service
+        if: needs.detect-changes.outputs.user-service == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservico-usuario
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: user-service
+
+      - name: Create User Service ECR
+        if: needs.detect-changes.outputs.user-service == 'true'
+        run: |
+          aws ecr describe-repositories --repository-names mana-food-user-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-user-service --region us-east-1
+
+      - name: Build & Push User Service
+        if: needs.detect-changes.outputs.user-service == 'true'
+        run: |
           docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }} ./user-service
           docker push ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}
-          
-          # Order Service
-          # docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }} ./order-service
-          # docker push ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}
-          
-          # Product Service
+
+      # ==========================================
+      # ORDER SERVICE
+      # ==========================================
+      - name: Checkout Order Service
+        if: needs.detect-changes.outputs.order-service == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservice-order
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: order-service
+
+      - name: Create Order Service ECR
+        if: needs.detect-changes.outputs.order-service == 'true'
+        run: |
+          aws ecr describe-repositories --repository-names mana-food-order-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-order-service --region us-east-1
+
+      - name: Build & Push Order Service
+        if: needs.detect-changes.outputs.order-service == 'true'
+        run: |
+          docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }} ./order-service
+          docker push ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}
+
+      # ==========================================
+      # PRODUCT SERVICE
+      # ==========================================
+      - name: Checkout Product Service
+        if: needs.detect-changes.outputs.product-service == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservice-produto-app
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: product-service
+
+      - name: Create Product Service ECR
+        if: needs.detect-changes.outputs.product-service == 'true'
+        run: |
+          aws ecr describe-repositories --repository-names mana-food-product-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-product-service --region us-east-1
+
+      - name: Build & Push Product Service
+        if: needs.detect-changes.outputs.product-service == 'true'
+        run: |
           docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }} ./product-service
           docker push ${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }}
-          
-          # Payment Service
+
+      # ==========================================
+      # PAYMENT SERVICE
+      # ==========================================
+      - name: Checkout Payment Service
+        if: needs.detect-changes.outputs.payment-service == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservico-pagamento
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: payment-service
+
+      - name: Create Payment Service ECR
+        if: needs.detect-changes.outputs.payment-service == 'true'
+        run: |
+          aws ecr describe-repositories --repository-names mana-food-payment-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-payment-service --region us-east-1
+
+      - name: Build & Push Payment Service
+        if: needs.detect-changes.outputs.payment-service == 'true'
+        run: |
           docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-payment-service:${{ github.sha }} ./payment-service
           docker push ${{ steps.ecr.outputs.registry }}/mana-food-payment-service:${{ github.sha }}
+
+      # ==========================================
+      # SET OUTPUTS
+      # ==========================================
+      - name: Set Image Tags
+        id: images
+        run: |
+          echo "gateway=${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "user-service=${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "order-service=${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "product-service=${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }}" >> $GITHUB_OUTPUT
+          echo "payment-service=${{ steps.ecr.outputs.registry }}/mana-food-payment-service:${{ github.sha }}" >> $GITHUB_OUTPUT
