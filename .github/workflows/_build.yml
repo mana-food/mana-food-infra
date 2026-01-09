@@ -75,6 +75,7 @@ jobs:
 
       # Checkout Order Service
       - name: Checkout Order Service
+        if: false
         uses: actions/checkout@v4
         with:
           repository: mana-food/mana-food-microsservice-order
@@ -116,8 +117,8 @@ jobs:
           aws ecr create-repository --repository-name mana-food-user-service --region us-east-1
           
           # Order Service
-          aws ecr describe-repositories --repository-names mana-food-order-service --region us-east-1 2>/dev/null || \
-          aws ecr create-repository --repository-name mana-food-order-service --region us-east-1
+          # aws ecr describe-repositories --repository-names mana-food-order-service --region us-east-1 2>/dev/null || \
+          # aws ecr create-repository --repository-name mana-food-order-service --region us-east-1
           
           # Product Service
           aws ecr describe-repositories --repository-names mana-food-product-service --region us-east-1 2>/dev/null || \
