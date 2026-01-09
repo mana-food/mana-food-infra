@@ -17,6 +17,18 @@ on:
         value: ${{ jobs.apply.outputs.dynamodb-table }}
       user-service-role:
         value: ${{ jobs.apply.outputs.user-service-role }}
+      order-service-role:
+        value: ${{ jobs.apply.outputs.order-service-role }}
+      product-service-role:
+        value: ${{ jobs.apply.outputs.product-service-role }}
+      orders-db-endpoint:
+        value: ${{ jobs.apply.outputs.orders-db-endpoint }}
+      orders-db-secret-arn:
+        value: ${{ jobs.apply.outputs.orders-db-secret-arn }}
+      products-db-endpoint:
+        value: ${{ jobs.apply.outputs.products-db-endpoint }}
+      products-db-secret-arn:
+        value: ${{ jobs.apply.outputs.products-db-secret-arn }}
 
 jobs:
   apply:
@@ -28,7 +40,13 @@ jobs:
       lambda-function: ${{ steps.output.outputs.lambda }}
       lambda-url: ${{ steps.output.outputs.lambda-url }}
       dynamodb-table: ${{ steps.output.outputs.dynamodb }}
-      user-service-role: ${{ steps.output.outputs.role }}
+      user-service-role: ${{ steps.output.outputs.user-role }}
+      order-service-role: ${{ steps.output.outputs.order-role }}
+      product-service-role: ${{ steps.output.outputs.product-role }}
+      orders-db-endpoint: ${{ steps.output.outputs.orders-db }}
+      orders-db-secret-arn: ${{ steps.output.outputs.orders-secret }}
+      products-db-endpoint: ${{ steps.output.outputs.products-db }}
+      products-db-secret-arn: ${{ steps.output.outputs.products-secret }}
 
     steps:
       - uses: actions/checkout@v4
@@ -87,4 +105,10 @@ jobs:
           echo "lambda=$(terraform output -raw lambda_function_name)" >> $GITHUB_OUTPUT
           echo "lambda-url=$(terraform output -raw lambda_auth_url)" >> $GITHUB_OUTPUT
           echo "dynamodb=$(terraform output -raw dynamodb_users_table_name)" >> $GITHUB_OUTPUT
-          echo "role=$(terraform output -raw user_service_iam_role_arn)" >> $GITHUB_OUTPUT
+          echo "user-role=$(terraform output -raw user_service_iam_role_arn)" >> $GITHUB_OUTPUT
+          echo "order-role=$(terraform output -raw order_service_iam_role_arn)" >> $GITHUB_OUTPUT
+          echo "product-role=$(terraform output -raw product_service_iam_role_arn)" >> $GITHUB_OUTPUT
+          echo "orders-db=$(terraform output -raw orders_db_endpoint)" >> $GITHUB_OUTPUT
+          echo "orders-secret=$(terraform output -raw orders_db_secret_arn)" >> $GITHUB_OUTPUT
+          echo "products-db=$(terraform output -raw products_db_endpoint)" >> $GITHUB_OUTPUT
+          echo "products-secret=$(terraform output -raw products_db_secret_arn)" >> $GITHUB_OUTPUT
