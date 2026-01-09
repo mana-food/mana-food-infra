@@ -84,6 +84,30 @@ jobs:
           
           echo "DynamoDB table ready"
 
+          
+      - name: Force Cleanup Conflicting Resources
+        if: inputs.action == 'apply'
+        continue-on-error: true
+        run: |
+          echo "🧹 Limpando recursos órfãos..."
+          
+          # Secrets Manager
+          aws secretsmanager delete-secret --secret-id mana-food-orders-db-password --force-delete-without-recovery --region us-east-1 2>/dev/null || true
+          aws secretsmanager delete-secret --secret-id mana-food-products-db-password --force-delete-without-recovery --region us-east-1 2>/dev/null || true
+          
+          # IAM Role Lambda
+          aws iam list-role-policies --role-name mana-food-lambda-auth-role --query "PolicyNames[*]" --output text 2>/dev/null | xargs -r -n1 aws iam delete-role-policy --role-name mana-food-lambda-auth-role --policy-name 2>/dev/null || true
+          aws iam delete-role --role-name mana-food-lambda-auth-role 2>/dev/null || true
+          
+          # CloudWatch Logs
+          aws logs delete-log-group --log-group-name /aws/lambda/mana-food-auth --region us-east-1 2>/dev/null || true
+          aws logs delete-log-group --log-group-name /aws/eks/mana-food-eks/cluster --region us-east-1 2>/dev/null || true
+          
+          # KMS Alias
+          aws kms delete-alias --alias-name alias/eks/mana-food-eks --region us-east-1 2>/dev/null || true
+          
+          echo "✅ Limpeza concluída"
+
       - name: Init
         working-directory: terraform/envs/prod
         run: terraform init
