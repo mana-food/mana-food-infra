@@ -5,9 +5,8 @@ metadata:
   namespace: default
   labels:
     app: user-service
-    version: v1
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: user-service
@@ -15,12 +14,11 @@ spec:
     metadata:
       labels:
         app: user-service
-        version: v1
     spec:
       serviceAccountName: user-service-sa
       containers:
       - name: user-service
-        image: ghcr.io/seu-org/user-service:latest
+        image: ${USER_SERVICE_IMAGE}
         imagePullPolicy: Always
         ports:
         - containerPort: 8080
@@ -40,7 +38,7 @@ spec:
         - name: AWS_REGION
           value: "us-east-1"
         - name: DYNAMODB_ENDPOINT
-          value: ""  # Vazio = usa DynamoDB real da AWS
+          value: ""
         - name: Jwt__SecretKey
           valueFrom:
             secretKeyRef:
@@ -88,13 +86,4 @@ metadata:
   name: user-service-sa
   namespace: default
   annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::ACCOUNT_ID:role/user-service-dynamodb-role
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: user-service-secrets
-  namespace: default
-type: Opaque
-stringData:
-  JWT_SECRET: "your-super-secret-key-here-must-be-at-least-256-bits-long-32chars"
+    eks.amazonaws.com/role-arn: ${USER_SERVICE_ROLE_ARN}

@@ -8,6 +8,18 @@ on:
         type: choice
         options: [dev, prod]
         default: 'dev'
+      deploy-lambda:
+        description: 'Deploy Lambda Auth'
+        type: boolean
+        default: true
+      deploy-gateway:
+        description: 'Deploy API Gateway'
+        type: boolean
+        default: true
+      deploy-user-service:
+        description: 'Deploy User Service'
+        type: boolean
+        default: true
   push:
     branches: [main]
 
@@ -17,7 +29,7 @@ env:
 
 jobs:
   # ==========================================
-  # STAGE 1: BUILD (Parallel)
+  # STAGE 1: BUILD
   # ==========================================
   build:
     name: Build All Services
@@ -36,41 +48,65 @@ jobs:
       action: apply
 
   # ==========================================
-  # STAGE 3: DEPLOY SERVICES
+  # STAGE 3: DEPLOY LAMBDA (Conditional)
   # ==========================================
-  deploy:
-    name: Deploy Services
+  deploy-lambda:
+    name: Deploy Lambda Auth
     needs: [build, infra]
-    uses: ./.github/workflows/_deploy-services.yml
+    if: github.event.inputs.deploy-lambda != 'false'
+    uses: ./.github/workflows/_deploy-lambda.yml
     secrets: inherit
     with:
       lambda-artifact: ${{ needs.build.outputs.lambda-artifact }}
-      gateway-image: ${{ needs.build.outputs.gateway-image }}
-      user-service-image: ${{ needs.build.outputs.user-service-image }}
       lambda-function: ${{ needs.infra.outputs.lambda-function }}
-      lambda-url: ${{ needs.infra.outputs.lambda-url }}
+
+  # ==========================================
+  # STAGE 4: DEPLOY GATEWAY (Conditional)
+  # ==========================================
+  deploy-gateway:
+    name: Deploy API Gateway
+    needs: [build, infra]
+    if: github.event.inputs.deploy-gateway != 'false'
+    uses: ./.github/workflows/_deploy-gateway.yml
+    secrets: inherit
+    with:
+      gateway-image: ${{ needs.build.outputs.gateway-image }}
       eks-cluster: ${{ needs.infra.outputs.eks-cluster }}
-      dynamodb-table: ${{ needs.infra.outputs.dynamodb-table }}
+      lambda-url: ${{ needs.infra.outputs.lambda-url }}
+
+  # ==========================================
+  # STAGE 5: DEPLOY USER SERVICE (Conditional)
+  # ==========================================
+  deploy-user-service:
+    name: Deploy User Service
+    needs: [build, infra]
+    if: github.event.inputs.deploy-user-service != 'false'
+    uses: ./.github/workflows/_deploy-user-service.yml
+    secrets: inherit
+    with:
+      user-service-image: ${{ needs.build.outputs.user-service-image }}
+      eks-cluster: ${{ needs.infra.outputs.eks-cluster }}
       user-service-role: ${{ needs.infra.outputs.user-service-role }}
 
   # ==========================================
-  # STAGE 4: SMOKE TESTS
+  # STAGE 6: SMOKE TESTS
   # ==========================================
   test:
     name: Smoke Tests
-    needs: deploy
+    needs: [deploy-gateway]
+    if: github.event.inputs.deploy-gateway != 'false' && needs.deploy-gateway.outputs.gateway-url != 'http://pending'
     uses: ./.github/workflows/_smoke-tests.yml
     secrets: inherit
     with:
-      gateway-url: ${{ needs.deploy.outputs.gateway-url }}
+      gateway-url: ${{ needs.deploy-gateway.outputs.gateway-url }}
 
   # ==========================================
-  # ROLLBACK AUTOMÁTICO EM CASO DE FALHA
+  # ROLLBACK
   # ==========================================
   rollback:
     name: Rollback on Failure
     runs-on: ubuntu-latest
-    needs: [build, infra, deploy, test]
+    needs: [build, infra, deploy-lambda, deploy-gateway, deploy-user-service, test]
     if: failure()
     
     steps:
@@ -89,7 +125,7 @@ jobs:
           aws eks update-kubeconfig --region us-east-1 --name $(echo "${{ needs.infra.outputs.eks-cluster }}" || echo "mana-food-eks") || true
 
       - name: Delete K8s Resources
-        if: needs.deploy.result == 'failure' || needs.test.result == 'failure'
+        if: needs.deploy-gateway.result == 'failure' || needs.deploy-user-service.result == 'failure' || needs.test.result == 'failure'
         continue-on-error: true
         run: |
           kubectl delete deployment --all -n default || true
@@ -105,7 +141,7 @@ jobs:
       - name: Terraform Destroy
         if: needs.infra.result == 'success'
         continue-on-error: true
-        working-directory: infra/terraform/envs/prod
+        working-directory: terraform/envs/prod
         run: |
           terraform init
           terraform destroy \
@@ -124,11 +160,13 @@ jobs:
             --repository-name mana-food-user-service \
             --image-ids imageTag=${{ github.sha }} || true
 
-      - name: Send Rollback Notification
+      - name: Rollback Summary
         run: |
-          echo "ROLLBACK EXECUTADO"
+          echo "⚠️ ROLLBACK EXECUTADO"
           echo "Falha detectada em:"
           echo "  - Build: ${{ needs.build.result }}"
           echo "  - Infra: ${{ needs.infra.result }}"
-          echo "  - Deploy: ${{ needs.deploy.result }}"
-          echo "  - Test: ${{ needs.test.result }}"
+          echo "  - Lambda: ${{ needs.deploy-lambda.result }}"
+          echo "  - Gateway: ${{ needs.deploy-gateway.result }}"
+          echo "  - User Service: ${{ needs.deploy-user-service.result }}"
+          echo "  - Tests: ${{ needs.test.result }}"

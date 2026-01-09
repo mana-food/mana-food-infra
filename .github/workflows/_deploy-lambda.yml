@@ -1,0 +1,59 @@
+name: Deploy Lambda Auth
+
+on:
+  workflow_call:
+    inputs:
+      lambda-artifact:
+        required: true
+        type: string
+      lambda-function:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy Lambda Auth
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Download Package
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.lambda-artifact }}
+
+      - name: Update Function Code
+        run: |
+          aws lambda update-function-code \
+            --function-name ${{ inputs.lambda-function }} \
+            --zip-file fileb://lambda.zip
+          
+          aws lambda wait function-updated \
+            --function-name ${{ inputs.lambda-function }}
+
+      - name: Update Configuration
+        run: |
+          aws lambda update-function-configuration \
+            --function-name ${{ inputs.lambda-function }} \
+            --environment "Variables={
+              ASPNETCORE_ENVIRONMENT=Production,
+              Jwt__SecretKey=${{ secrets.JWT_SECRET }},
+              Jwt__Issuer=ManaFood,
+              Jwt__Audience=ManaFoodUsers,
+              Jwt__ExpirationMinutes=60
+            }"
+          
+          aws lambda wait function-updated \
+            --function-name ${{ inputs.lambda-function }}
+
+      - name: Verificando Implantação
+        run: |
+          echo "✅ Lambda Auth implantado com sucesso"
+          aws lambda get-function --function-name ${{ inputs.lambda-function }} \
+            --query 'Configuration.[FunctionName,LastModified,State]' \
+            --output table
