@@ -197,64 +197,107 @@ jobs:
         run: |
           aws eks update-kubeconfig --region us-east-1 --name $(echo "${{ needs.infra.outputs.eks-cluster }}" || echo "mana-food-eks") || true
 
-      - name: Delete K8s Resources
-        if: |
-          needs.deploy-gateway.result == 'failure' || 
-          needs.deploy-user-service.result == 'failure' || 
-          needs.deploy-order-service.result == 'failure' ||
-          needs.deploy-product-service.result == 'failure' ||
-          needs.deploy-payment-service.result == 'failure' ||
-          needs.test.result == 'failure'
+      # Rollback seletivo - só apaga o que falhou
+      - name: Rollback Gateway
+        if: needs.deploy-gateway.result == 'failure'
         continue-on-error: true
         run: |
-          kubectl delete deployment --all -n default || true
-          kubectl delete service --all -n default || true
-          kubectl delete configmap --all -n default || true
-          kubectl delete secret --all -n default || true
+          echo "🔄 Revertendo Gateway..."
+          kubectl delete deployment api-gateway -n default || true
+          kubectl delete service api-gateway -n default || true
+          kubectl delete hpa api-gateway-hpa -n default || true
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.6.0
-
-      - name: Terraform Destroy
-        if: needs.infra.result == 'success'
-        continue-on-error: true
-        working-directory: terraform/envs/prod
-        run: |
-          terraform init
-          terraform destroy \
-            -var="jwt_secret_key=${{ secrets.JWT_SECRET }}" \
-            -var="bucket_state_name=${{ secrets.TF_STATE_BUCKET }}" \
-            -auto-approve
-
-      - name: Cleanup ECR Images
+      - name: Rollback User Service
+        if: needs.deploy-user-service.result == 'failure'
         continue-on-error: true
         run: |
-          aws ecr batch-delete-image \
-            --repository-name mana-food-gateway \
-            --image-ids imageTag=${{ github.sha }} || true
+          echo "🔄 Revertendo User Service..."
+          kubectl delete deployment user-service -n default || true
+          kubectl delete service user-service -n default || true
+          kubectl delete serviceaccount user-service-sa -n default || true
+          kubectl delete hpa user-service-hpa -n default || true
+
+      - name: Rollback Order Service
+        if: needs.deploy-order-service.result == 'failure'
+        continue-on-error: true
+        run: |
+          echo "🔄 Revertendo Order Service..."
+          kubectl delete deployment order-service -n default || true
+          kubectl delete service order-service -n default || true
+          kubectl delete serviceaccount order-service-sa -n default || true
+          kubectl delete secret order-db-secret -n default || true
+          kubectl delete hpa order-service-hpa -n default || true
+
+      - name: Rollback Product Service
+        if: needs.deploy-product-service.result == 'failure'
+        continue-on-error: true
+        run: |
+          echo "🔄 Revertendo Product Service..."
+          kubectl delete deployment product-service -n default || true
+          kubectl delete service product-service -n default || true
+          kubectl delete serviceaccount product-service-sa -n default || true
+          kubectl delete secret product-db-secret -n default || true
+          kubectl delete hpa product-service-hpa -n default || true
+
+      - name: Rollback Payment Service
+        if: needs.deploy-payment-service.result == 'failure'
+        continue-on-error: true
+        run: |
+          echo "🔄 Revertendo Payment Service..."
+          kubectl delete deployment payment-service -n default || true
+          kubectl delete service payment-service -n default || true
+          kubectl delete hpa payment-service-hpa -n default || true
+
+      - name: Rollback Lambda
+        if: needs.deploy-lambda.result == 'failure'
+        continue-on-error: true
+        run: |
+          echo "🔄 Revertendo Lambda..."
+          # Lambda não precisa de rollback, próximo deploy sobrescreve
+
+      - name: Cleanup ECR Images (apenas dos serviços que falharam)
+        continue-on-error: true
+        run: |
+          # Gateway
+          if [ "${{ needs.deploy-gateway.result }}" = "failure" ]; then
+            aws ecr batch-delete-image \
+              --repository-name mana-food-gateway \
+              --image-ids imageTag=${{ github.sha }} || true
+          fi
           
-          aws ecr batch-delete-image \
-            --repository-name mana-food-user-service \
-            --image-ids imageTag=${{ github.sha }} || true
+          # User Service
+          if [ "${{ needs.deploy-user-service.result }}" = "failure" ]; then
+            aws ecr batch-delete-image \
+              --repository-name mana-food-user-service \
+              --image-ids imageTag=${{ github.sha }} || true
+          fi
           
-          aws ecr batch-delete-image \
-            --repository-name mana-food-order-service \
-            --image-ids imageTag=${{ github.sha }} || true
+          # Order Service
+          if [ "${{ needs.deploy-order-service.result }}" = "failure" ]; then
+            aws ecr batch-delete-image \
+              --repository-name mana-food-order-service \
+              --image-ids imageTag=${{ github.sha }} || true
+          fi
           
-          aws ecr batch-delete-image \
-            --repository-name mana-food-product-service \
-            --image-ids imageTag=${{ github.sha }} || true
+          # Product Service
+          if [ "${{ needs.deploy-product-service.result }}" = "failure" ]; then
+            aws ecr batch-delete-image \
+              --repository-name mana-food-product-service \
+              --image-ids imageTag=${{ github.sha }} || true
+          fi
           
-          aws ecr batch-delete-image \
-            --repository-name mana-food-payment-service \
-            --image-ids imageTag=${{ github.sha }} || true
+          # Payment Service
+          if [ "${{ needs.deploy-payment-service.result }}" = "failure" ]; then
+            aws ecr batch-delete-image \
+              --repository-name mana-food-payment-service \
+              --image-ids imageTag=${{ github.sha }} || true
+          fi
 
       - name: Rollback Summary
         run: |
-          echo "⚠️ ROLLBACK EXECUTADO"
-          echo "Falha detectada em:"
+          echo "⚠️ ROLLBACK SELETIVO EXECUTADO"
+          echo ""
+          echo "Status dos componentes:"
           echo "  - Build: ${{ needs.build.result }}"
           echo "  - Infra: ${{ needs.infra.result }}"
           echo "  - Lambda: ${{ needs.deploy-lambda.result }}"
@@ -264,3 +307,6 @@ jobs:
           echo "  - Product Service: ${{ needs.deploy-product-service.result }}"
           echo "  - Payment Service: ${{ needs.deploy-payment-service.result }}"
           echo "  - Tests: ${{ needs.test.result }}"
+          echo ""
+          echo "✅ Serviços bem-sucedidos foram mantidos"
+          echo "❌ Apenas os serviços com falha foram revertidos"
