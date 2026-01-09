@@ -84,7 +84,7 @@ jobs:
           
           echo "DynamoDB table ready"
 
-          
+
       - name: Force Cleanup Conflicting Resources
         if: inputs.action == 'apply'
         continue-on-error: true
@@ -95,9 +95,19 @@ jobs:
           aws secretsmanager delete-secret --secret-id mana-food-orders-db-password --force-delete-without-recovery --region us-east-1 2>/dev/null || true
           aws secretsmanager delete-secret --secret-id mana-food-products-db-password --force-delete-without-recovery --region us-east-1 2>/dev/null || true
           
-          # IAM Role Lambda
-          aws iam list-role-policies --role-name mana-food-lambda-auth-role --query "PolicyNames[*]" --output text 2>/dev/null | xargs -r -n1 aws iam delete-role-policy --role-name mana-food-lambda-auth-role --policy-name 2>/dev/null || true
-          aws iam delete-role --role-name mana-food-lambda-auth-role 2>/dev/null || true
+          # IAM Role Lambda - deletar policies primeiro
+          ROLE_NAME="mana-food-lambda-auth-role"
+          
+          # Detach managed policies
+          aws iam list-attached-role-policies --role-name $ROLE_NAME --query "AttachedPolicies[*].PolicyArn" --output text 2>/dev/null | \
+            xargs -r -n1 -I {} aws iam detach-role-policy --role-name $ROLE_NAME --policy-arn {} 2>/dev/null || true
+          
+          # Delete inline policies
+          aws iam list-role-policies --role-name $ROLE_NAME --query "PolicyNames[*]" --output text 2>/dev/null | \
+            xargs -r -n1 -I {} aws iam delete-role-policy --role-name $ROLE_NAME --policy-name {} 2>/dev/null || true
+          
+          # Delete role
+          aws iam delete-role --role-name $ROLE_NAME 2>/dev/null || true
           
           # CloudWatch Logs
           aws logs delete-log-group --log-group-name /aws/lambda/mana-food-auth --region us-east-1 2>/dev/null || true
@@ -106,7 +116,8 @@ jobs:
           # KMS Alias
           aws kms delete-alias --alias-name alias/eks/mana-food-eks --region us-east-1 2>/dev/null || true
           
-          echo "✅ Limpeza concluída"
+          echo "✅ Limpeza concluída - aguardando 5 segundos..."
+          sleep 5
 
       - name: Init
         working-directory: terraform/envs/prod
