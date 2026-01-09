@@ -38,6 +38,8 @@ spec:
           value: "http://user-service:80"
         - name: PAYMENT_SERVICE_URL
           value: "http://payment-service:80"
+        - name: PRODUCT_SERVICE_URL
+          value: "http://product-service:80"
         - name: AUTH_LAMBDA_URL
           value: ${AUTH_LAMBDA_URL}
         - name: JWT_SECRET
