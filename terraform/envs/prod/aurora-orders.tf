@@ -72,8 +72,9 @@ resource "aws_rds_cluster_instance" "orders" {
 }
 
 resource "random_password" "orders_db_password" {
-  length  = 32
-  special = true
+  length           = 32
+  special          = true
+  override_special = "!#$%&*()-_=+[]{}<>:?" 
 }
 
 resource "aws_secretsmanager_secret" "orders_db_password" {
