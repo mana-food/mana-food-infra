@@ -40,7 +40,7 @@ resource "aws_rds_cluster" "products" {
   cluster_identifier      = "${var.project_name}-products"
   engine                  = "aurora-mysql"
   engine_mode             = "provisioned"
-  engine_version          = "8.0.mysql_aurora.3.05.2"
+  engine_version          = "8.0.mysql_aurora.3.07.1"
   database_name           = "products"
   master_username         = "admin"
   master_password         = random_password.products_db_password.result
