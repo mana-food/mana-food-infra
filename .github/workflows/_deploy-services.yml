@@ -135,6 +135,7 @@ jobs:
           data:
             AUTH_LAMBDA_URL: ${{ inputs.lambda-url }}
             USER_SERVICE_URL: "http://user-service:80"
+            PAYMENT_SERVICE_URL: "http://payment-service:80"
           ---
           apiVersion: v1
           kind: Secret
@@ -181,6 +182,11 @@ jobs:
                       configMapKeyRef:
                         name: gateway-config
                         key: USER_SERVICE_URL
+                  - name: PAYMENT_SERVICE_URL
+                    valueFrom:
+                      configMapKeyRef:
+                        name: gateway-config
+                        key: PAYMENT_SERVICE_URL
                   - name: AUTH_LAMBDA_URL
                     valueFrom:
                       configMapKeyRef:
