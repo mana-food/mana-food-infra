@@ -143,8 +143,8 @@ jobs:
           docker push ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}
           
           # Order Service
-          docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }} ./order-service
-          docker push ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}
+          # docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }} ./order-service
+          # docker push ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}
           
           # Product Service
           docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }} ./product-service
