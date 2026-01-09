@@ -8,6 +8,10 @@ on:
         type: choice
         options: [dev, prod]
         default: 'dev'
+      force-rebuild-all:
+        description: 'Force rebuild all services'
+        type: boolean
+        default: false
       deploy-lambda:
         description: 'Deploy Lambda Auth'
         type: boolean
@@ -40,12 +44,16 @@ env:
   ENVIRONMENT: ${{ github.event.inputs.environment || 'dev' }}
 
 jobs:
-  # ==========================================
-  # STAGE 1: BUILD
-  # ==========================================
   build:
     name: Build All Services
     uses: ./.github/workflows/_build.yml
+    with:
+      force-build-gateway: ${{ github.event.inputs.force-rebuild-all == 'true' }}
+      force-build-user-service: ${{ github.event.inputs.force-rebuild-all == 'true' }}
+      force-build-order-service: ${{ github.event.inputs.force-rebuild-all == 'true' }}
+      force-build-product-service: ${{ github.event.inputs.force-rebuild-all == 'true' }}
+      force-build-payment-service: ${{ github.event.inputs.force-rebuild-all == 'true' }}
+      force-build-lambda: ${{ github.event.inputs.force-rebuild-all == 'true' }}
     secrets: inherit
 
   # ==========================================
