@@ -47,3 +47,35 @@ output "kubectl_command" {
   description = "Comando para configurar kubectl"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${module.eks.cluster_name}"
 }
+
+# Orders Service
+output "orders_db_endpoint" {
+  description = "Orders Aurora endpoint"
+  value       = aws_rds_cluster.orders.endpoint
+}
+
+output "orders_db_secret_arn" {
+  description = "Orders DB password secret ARN"
+  value       = aws_secretsmanager_secret.orders_db_password.arn
+}
+
+output "order_service_iam_role_arn" {
+  description = "IAM Role ARN for Order Service"
+  value       = aws_iam_role.order_service.arn
+}
+
+# Products Service
+output "products_db_endpoint" {
+  description = "Products Aurora endpoint"
+  value       = aws_rds_cluster.products.endpoint
+}
+
+output "products_db_secret_arn" {
+  description = "Products DB password secret ARN"
+  value       = aws_secretsmanager_secret.products_db_password.arn
+}
+
+output "product_service_iam_role_arn" {
+  description = "IAM Role ARN for Product Service"
+  value       = aws_iam_role.product_service.arn
+}

@@ -9,6 +9,12 @@ on:
         value: ${{ jobs.containers.outputs.gateway }}
       user-service-image:
         value: ${{ jobs.containers.outputs.user-service }}
+      order-service-image:
+        value: ${{ jobs.containers.outputs.order-service }}
+      product-service-image:
+        value: ${{ jobs.containers.outputs.product-service }}
+      payment-service-image:
+        value: ${{ jobs.containers.outputs.payment-service }}
 
 jobs:
   lambda:
@@ -46,6 +52,9 @@ jobs:
     outputs:
       gateway: ${{ steps.ecr.outputs.registry }}/mana-food-gateway:${{ github.sha }}
       user-service: ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}
+      order-service: ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}
+      product-service: ${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }}
+      payment-service: ${{ steps.ecr.outputs.registry }}/mana-food-payment-service:${{ github.sha }}
     
     steps:
       # Checkout Gateway
@@ -64,6 +73,30 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
           path: user-service
 
+      # Checkout Order Service
+      - name: Checkout Order Service
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservice-order
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: order-service
+
+      # Checkout Product Service
+      - name: Checkout Product Service
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservice-produto-app
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: product-service
+
+      # Checkout Payment Service
+      - name: Checkout Payment Service
+        uses: actions/checkout@v4
+        with:
+          repository: mana-food/mana-food-microsservico-pagamento
+          token: ${{ secrets.PERSONAL_ACCESS_TOKEN_MANA_FOOD_APP }}
+          path: payment-service
+
       - name: Configure AWS
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -74,11 +107,25 @@ jobs:
       # Criar repositórios ECR
       - name: Create ECR Repositories
         run: |
+          # Gateway
           aws ecr describe-repositories --repository-names mana-food-gateway --region us-east-1 2>/dev/null || \
           aws ecr create-repository --repository-name mana-food-gateway --region us-east-1
           
+          # User Service
           aws ecr describe-repositories --repository-names mana-food-user-service --region us-east-1 2>/dev/null || \
           aws ecr create-repository --repository-name mana-food-user-service --region us-east-1
+          
+          # Order Service
+          aws ecr describe-repositories --repository-names mana-food-order-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-order-service --region us-east-1
+          
+          # Product Service
+          aws ecr describe-repositories --repository-names mana-food-product-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-product-service --region us-east-1
+          
+          # Payment Service
+          aws ecr describe-repositories --repository-names mana-food-payment-service --region us-east-1 2>/dev/null || \
+          aws ecr create-repository --repository-name mana-food-payment-service --region us-east-1
 
       - name: Login to ECR
         id: ecr
@@ -93,3 +140,15 @@ jobs:
           # User Service
           docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }} ./user-service
           docker push ${{ steps.ecr.outputs.registry }}/mana-food-user-service:${{ github.sha }}
+          
+          # Order Service
+          docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }} ./order-service
+          docker push ${{ steps.ecr.outputs.registry }}/mana-food-order-service:${{ github.sha }}
+          
+          # Product Service
+          docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }} ./product-service
+          docker push ${{ steps.ecr.outputs.registry }}/mana-food-product-service:${{ github.sha }}
+          
+          # Payment Service
+          docker build -t ${{ steps.ecr.outputs.registry }}/mana-food-payment-service:${{ github.sha }} ./payment-service
+          docker push ${{ steps.ecr.outputs.registry }}/mana-food-payment-service:${{ github.sha }}

@@ -1,0 +1,94 @@
+name: Deploy Product Service
+
+on:
+  workflow_call:
+    inputs:
+      product-service-image:
+        required: true
+        type: string
+      eks-cluster:
+        required: true
+        type: string
+      product-service-role:
+        required: true
+        type: string
+      products-db-endpoint:
+        required: true
+        type: string
+      products-db-secret-arn:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy Product Service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Configurando kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name ${{ inputs.eks-cluster }}
+
+      - name: Verificando Imagem
+        run: |
+          echo "Verificando imagem do Product Service no ECR..."
+          aws ecr describe-images \
+            --repository-name mana-food-product-service \
+            --image-ids imageTag=$(echo "${{ inputs.product-service-image }}" | cut -d':' -f2) \
+            --region us-east-1
+          echo "✅ Imagem verificada"
+
+      - name: Obtendo senha do banco
+        id: db-secret
+        run: |
+          DB_PASSWORD=$(aws secretsmanager get-secret-value \
+            --secret-id ${{ inputs.products-db-secret-arn }} \
+            --query SecretString \
+            --output text)
+          echo "::add-mask::$DB_PASSWORD"
+          echo "password=$DB_PASSWORD" >> $GITHUB_OUTPUT
+
+      - name: Criando Secret do Banco
+        run: |
+          kubectl create secret generic product-db-secret \
+            --from-literal=DB_PASSWORD="${{ steps.db-secret.outputs.password }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Criando Secret JWT
+        run: |
+          kubectl create secret generic jwt-secret \
+            --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Preparando Manifests
+        run: |
+          # Substituir variáveis
+          export PRODUCT_SERVICE_IMAGE="${{ inputs.product-service-image }}"
+          export PRODUCTS_DB_ENDPOINT="${{ inputs.products-db-endpoint }}"
+          export PRODUCT_SERVICE_ROLE_ARN="${{ inputs.product-service-role }}"
+          
+          envsubst < k8s/product-service-deployment.yaml | kubectl apply -f -
+
+      - name: Deploy HPA
+        run: |
+          kubectl apply -f k8s/hpa.yaml
+
+      - name: Aguardando Rollout
+        run: |
+          kubectl rollout status deployment/product-service --timeout=300s
+
+      - name: Verificando Implantação
+        run: |
+          echo "✅ Product Service implantado com sucesso"
+          kubectl get pods -l app=product-service
+          kubectl get svc product-service

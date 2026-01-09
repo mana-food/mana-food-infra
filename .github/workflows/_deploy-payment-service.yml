@@ -1,0 +1,67 @@
+name: Deploy Payment Service
+
+on:
+  workflow_call:
+    inputs:
+      payment-service-image:
+        required: true
+        type: string
+      eks-cluster:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy Payment Service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Configurando kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name ${{ inputs.eks-cluster }}
+
+      - name: Verificando Imagem
+        run: |
+          echo "Verificando imagem do Payment Service no ECR..."
+          aws ecr describe-images \
+            --repository-name mana-food-payment-service \
+            --image-ids imageTag=$(echo "${{ inputs.payment-service-image }}" | cut -d':' -f2) \
+            --region us-east-1
+          echo "✅ Imagem verificada"
+
+      - name: Criando Secret JWT
+        run: |
+          kubectl create secret generic jwt-secret \
+            --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Preparando Manifests
+        run: |
+          # Substituir variáveis
+          export PAYMENT_SERVICE_IMAGE="${{ inputs.payment-service-image }}"
+          
+          envsubst < k8s/payment-service-deployment.yaml | kubectl apply -f -
+
+      - name: Deploy HPA
+        run: |
+          kubectl apply -f k8s/hpa.yaml
+
+      - name: Aguardando Rollout
+        run: |
+          kubectl rollout status deployment/payment-service --timeout=300s
+
+      - name: Verificando Implantação
+        run: |
+          echo "✅ Payment Service implantado com sucesso"
+          kubectl get pods -l app=payment-service
+          kubectl get svc payment-service
