@@ -74,6 +74,7 @@ resource "aws_rds_cluster_instance" "products" {
 resource "random_password" "products_db_password" {
   length  = 32
   special = true
+  override_special = "!#$%&*()-_=+[]{}<>:?"
 }
 
 resource "aws_secretsmanager_secret" "products_db_password" {
