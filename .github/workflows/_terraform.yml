@@ -94,6 +94,7 @@ jobs:
           terraform ${{ inputs.action }} \
             -var="jwt_secret_key=${{ secrets.JWT_SECRET }}" \
             -var="bucket_state_name=${{ secrets.TF_STATE_BUCKET }}" \
+            -refresh=true \
             -auto-approve
 
       - name: Outputs
