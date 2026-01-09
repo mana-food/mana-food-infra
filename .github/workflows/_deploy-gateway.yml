@@ -1,0 +1,89 @@
+name: Deploy API Gateway
+
+on:
+  workflow_call:
+    inputs:
+      gateway-image:
+        required: true
+        type: string
+      eks-cluster:
+        required: true
+        type: string
+      lambda-url:
+        required: true
+        type: string
+    outputs:
+      gateway-url:
+        value: ${{ jobs.deploy.outputs.url }}
+
+jobs:
+  deploy:
+    name: Deploy API Gateway
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.lb.outputs.url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Configurando kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name ${{ inputs.eks-cluster }}
+
+      - name: Verificando Imagem
+        run: |
+          echo "Verificando imagem do Gateway no ECR..."
+          aws ecr describe-images \
+            --repository-name mana-food-gateway \
+            --image-ids imageTag=$(echo "${{ inputs.gateway-image }}" | cut -d':' -f2) \
+            --region us-east-1
+          echo "✅ Imagem verificada"
+
+      - name: Criando Secret JWT
+        run: |
+          kubectl create secret generic gateway-secrets \
+            --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy Gateway
+        env:
+          GATEWAY_IMAGE: ${{ inputs.gateway-image }}
+          AUTH_LAMBDA_URL: ${{ inputs.lambda-url }}
+        run: |
+          envsubst < k8s/gateway-deployment.yaml | kubectl apply -f -
+
+      - name: Deploy HPA
+        run: |
+          kubectl apply -f k8s/hpa.yaml
+
+      - name: Aguardando Rollout
+        run: |
+          kubectl rollout status deployment/api-gateway --timeout=300s
+
+      - name: Obtendo URL do LoadBalancer
+        id: lb
+        run: |
+          for i in {1..20}; do
+            URL=$(kubectl get svc api-gateway \
+              -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || echo "")
+            
+            if [ -n "$URL" ]; then
+              echo "url=http://$URL" >> $GITHUB_OUTPUT
+              echo "✅ Gateway URL: http://$URL"
+              exit 0
+            fi
+            
+            echo "Tentativa $i/20..."
+            sleep 10
+          done
+          
+          echo "url=http://pending" >> $GITHUB_OUTPUT
+          echo "⚠️ LoadBalancer ainda provisionando"

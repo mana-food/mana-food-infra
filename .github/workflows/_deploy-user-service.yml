@@ -1,0 +1,70 @@
+name: Deploy User Service
+
+on:
+  workflow_call:
+    inputs:
+      user-service-image:
+        required: true
+        type: string
+      eks-cluster:
+        required: true
+        type: string
+      user-service-role:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    name: Deploy User Service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Configurando kubectl
+        run: |
+          aws eks update-kubeconfig \
+            --region us-east-1 \
+            --name ${{ inputs.eks-cluster }}
+
+      - name: Verificando Imagem
+        run: |
+          echo "Verificando imagem do User Service no ECR..."
+          aws ecr describe-images \
+            --repository-name mana-food-user-service \
+            --image-ids imageTag=$(echo "${{ inputs.user-service-image }}" | cut -d':' -f2) \
+            --region us-east-1
+          echo "✅ Imagem verificada"
+
+      - name: Criando Secret JWT
+        run: |
+          kubectl create secret generic user-service-secrets \
+            --from-literal=JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      - name: Deploy User Service
+        env:
+          USER_SERVICE_IMAGE: ${{ inputs.user-service-image }}
+          USER_SERVICE_ROLE_ARN: ${{ inputs.user-service-role }}
+        run: |
+          envsubst < k8s/user-service-deployment.yaml | kubectl apply -f -
+
+      - name: Deploy HPA
+        run: |
+          kubectl apply -f k8s/hpa.yaml
+
+      - name: Aguardando Rollout
+        run: |
+          kubectl rollout status deployment/user-service --timeout=300s
+
+      - name: Verificando Implantação
+        run: |
+          echo "✅ User Service implantado com sucesso"
+          kubectl get pods -l app=user-service
+          kubectl get svc user-service
