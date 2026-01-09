@@ -38,6 +38,8 @@ spec:
           value: "http://+:8080"
         - name: USER_SERVICE_URL
           value: "http://user-service"
+        - name: PAYMENT_SERVICE_URL
+          value: "http://payment-service"
         - name: AUTH_LAMBDA_URL
           valueFrom:
             configMapKeyRef:
