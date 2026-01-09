@@ -62,11 +62,15 @@ jobs:
 
   # ==========================================
   # STAGE 4: DEPLOY GATEWAY (Conditional)
+  # Depende do Lambda estar atualizado
   # ==========================================
   deploy-gateway:
     name: Deploy API Gateway
-    needs: [build, infra]
-    if: github.event.inputs.deploy-gateway != 'false'
+    needs: [build, infra, deploy-lambda]
+    if: |
+      always() && 
+      github.event.inputs.deploy-gateway != 'false' &&
+      (needs.deploy-lambda.result == 'success' || needs.deploy-lambda.result == 'skipped')
     uses: ./.github/workflows/_deploy-gateway.yml
     secrets: inherit
     with:
@@ -76,6 +80,7 @@ jobs:
 
   # ==========================================
   # STAGE 5: DEPLOY USER SERVICE (Conditional)
+  # Pode rodar em paralelo com Gateway
   # ==========================================
   deploy-user-service:
     name: Deploy User Service
@@ -94,7 +99,11 @@ jobs:
   test:
     name: Smoke Tests
     needs: [deploy-gateway]
-    if: github.event.inputs.deploy-gateway != 'false' && needs.deploy-gateway.outputs.gateway-url != 'http://pending'
+    if: |
+      always() &&
+      github.event.inputs.deploy-gateway != 'false' && 
+      needs.deploy-gateway.result == 'success' &&
+      needs.deploy-gateway.outputs.gateway-url != 'http://pending'
     uses: ./.github/workflows/_smoke-tests.yml
     secrets: inherit
     with:
