@@ -34,14 +34,16 @@ spec:
         - name: SPRING_PROFILES_ACTIVE
           value: "production"
         - name: SERVER_PORT
-          value: "8080"
+          value: "8081"
         - name: DB_HOST
           value: ${ORDERS_DB_ENDPOINT}
         - name: DB_PORT
           value: "3306"
         - name: DB_NAME
           value: "orders"
-        - name: DB_USER
+        - name: SPRING_DATASOURCE_URL
+          value: "jdbc:mysql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)?useSSL=false&serverTimezone=UTC"
+        - name: SPRING_DATASOURCE_USERNAME
           value: "admin"
         - name: DB_PASSWORD
           valueFrom:
@@ -60,13 +62,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8080
+            port: 8081
           initialDelaySeconds: 60
           periodSeconds: 20
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8080
+            port: 8081
           initialDelaySeconds: 30
           periodSeconds: 10
 ---
@@ -82,7 +84,7 @@ spec:
     app: order-service
   ports:
   - port: 80
-    targetPort: 8080
+    targetPort: 8081
     protocol: TCP
     name: http
   type: ClusterIP
