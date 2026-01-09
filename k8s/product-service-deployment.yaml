@@ -21,7 +21,7 @@ spec:
         image: ${PRODUCT_SERVICE_IMAGE}
         imagePullPolicy: Always
         ports:
-        - containerPort: 8080
+        - containerPort: 8081
           name: http
         resources:
           requests:
@@ -34,7 +34,7 @@ spec:
         - name: SPRING_PROFILES_ACTIVE
           value: "production"
         - name: SERVER_PORT
-          value: "8080"
+          value: "8081"
         - name: DB_HOST
           value: ${PRODUCTS_DB_ENDPOINT}
         - name: DB_PORT
@@ -60,13 +60,13 @@ spec:
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
-            port: 8080
+            port: 8081
           initialDelaySeconds: 60
           periodSeconds: 20
         readinessProbe:
           httpGet:
             path: /actuator/health/readiness
-            port: 8080
+            port: 8081
           initialDelaySeconds: 30
           periodSeconds: 10
 ---
@@ -82,7 +82,7 @@ spec:
     app: product-service
   ports:
   - port: 80
-    targetPort: 8080
+    targetPort: 8081
     protocol: TCP
     name: http
   type: ClusterIP
