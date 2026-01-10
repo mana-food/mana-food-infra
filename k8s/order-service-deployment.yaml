@@ -59,6 +59,8 @@ spec:
           value: "ManaFood"
         - name: JWT_AUDIENCE
           value: "ManaFoodUsers"
+        - name: PRODUCT_SERVICE_URL
+          value: "product-service:80"
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness
