@@ -45,7 +45,7 @@ spec:
           value: "jdbc:mysql://$(DB_HOST):$(DB_PORT)/$(DB_NAME)?useSSL=false&serverTimezone=UTC"
         - name: SPRING_DATASOURCE_USERNAME
           value: "admin"
-        - name: DB_PASSWORD
+        - name: SPRING_DATASOURCE_PASSWORD
           valueFrom:
             secretKeyRef:
               name: order-db-secret
