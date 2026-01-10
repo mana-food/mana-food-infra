@@ -27,7 +27,7 @@ on:
       deploy-order-service:
         description: 'Deploy Order Service'
         type: boolean
-        default: false
+        default: true
       deploy-product-service:
         description: 'Deploy Product Service'
         type: boolean
