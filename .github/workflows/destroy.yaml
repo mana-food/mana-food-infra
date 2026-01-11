@@ -43,15 +43,52 @@ jobs:
 
       - name: Setup kubectl
         run: |
-          aws eks update-kubeconfig --region us-east-1 --name ${{ steps.cluster.outputs.name }}
+          aws eks update-kubeconfig --region us-east-1 --name ${{ steps.cluster.outputs.name }} || true
 
-      - name: Delete K8s Resources
+      - name: Delete All K8s Resources (including LoadBalancers)
         run: |
-          kubectl delete deployment --all -n default || true
-          kubectl delete service --all -n default || true
+          echo "Deleting all services (this will remove Load Balancers)..."
+          kubectl delete service --all -n default --timeout=5m || true
+          
+          echo "Waiting for Load Balancers to be deleted..."
+          sleep 60
+          
+          echo "Deleting all deployments..."
+          kubectl delete deployment --all -n default --timeout=5m || true
+          
+          echo "Deleting all remaining resources..."
+          kubectl delete ingress --all -n default || true
           kubectl delete configmap --all -n default || true
           kubectl delete secret --all -n default || true
           kubectl delete serviceaccount --all -n default || true
+          kubectl delete hpa --all -n default || true
+          
+          echo "Waiting for resources to be fully deleted..."
+          sleep 30
+
+      - name: Cleanup All ECR Repositories
+        run: |
+          echo "Deleting all ECR repositories..."
+          aws ecr delete-repository --repository-name mana-food-gateway --force || true
+          aws ecr delete-repository --repository-name mana-food-user-service --force || true
+          aws ecr delete-repository --repository-name mana-food-order-service --force || true
+          aws ecr delete-repository --repository-name mana-food-product-service --force || true
+          aws ecr delete-repository --repository-name mana-food-payment-service --force || true
+
+      - name: Force Delete Load Balancers
+        run: |
+          echo "Finding and deleting orphaned Load Balancers..."
+          for lb in $(aws elbv2 describe-load-balancers --query "LoadBalancers[?contains(LoadBalancerName, 'mana-food')].LoadBalancerArn" --output text); do
+            echo "Deleting Load Balancer: $lb"
+            aws elbv2 delete-load-balancer --load-balancer-arn $lb || true
+          done
+          
+          # Classic Load Balancers
+          for clb in $(aws elb describe-load-balancers --query "LoadBalancerDescriptions[?contains(LoadBalancerName, 'mana-food')].LoadBalancerName" --output text); do
+            echo "Deleting Classic Load Balancer: $clb"
+            aws elb delete-load-balancer --load-balancer-name $clb || true
+          done
+          
           sleep 30
 
       - name: Terraform Destroy
@@ -62,7 +99,40 @@ jobs:
             -var="bucket_state_name=${{ secrets.TERRAFORM_STATE_BUCKET }}" \
             -auto-approve
 
-      - name: Cleanup ECR
+      - name: Cleanup Orphaned Resources (Retry)
+        if: always()
         run: |
-          aws ecr delete-repository --repository-name mana-food-gateway --force || true
-          aws ecr delete-repository --repository-name mana-food-user-service --force || true
+          echo "Cleaning up any remaining orphaned resources..."
+          
+          # Delete orphaned ENIs
+          for eni in $(aws ec2 describe-network-interfaces --filters "Name=tag:kubernetes.io/cluster/mana-food-eks,Values=owned" --query "NetworkInterfaces[].NetworkInterfaceId" --output text); do
+            echo "Deleting ENI: $eni"
+            aws ec2 delete-network-interface --network-interface-id $eni || true
+          done
+          
+          # Delete orphaned Security Groups
+          for sg in $(aws ec2 describe-security-groups --filters "Name=tag:kubernetes.io/cluster/mana-food-eks,Values=owned" --query "SecurityGroups[].GroupId" --output text); do
+            echo "Deleting Security Group: $sg"
+            aws ec2 delete-security-group --group-id $sg || true
+          done
+
+      - name: Final Cleanup Report
+        if: always()
+        run: |
+          echo "=== Final Cleanup Report ==="
+          echo "Checking for remaining resources..."
+          
+          echo "EKS Clusters:"
+          aws eks list-clusters --query "clusters[?contains(@, 'mana-food')]" || true
+          
+          echo "RDS Clusters:"
+          aws rds describe-db-clusters --query "DBClusters[?contains(DBClusterIdentifier, 'mana-food')].DBClusterIdentifier" || true
+          
+          echo "DynamoDB Tables:"
+          aws dynamodb list-tables --query "TableNames[?contains(@, 'mana-food')]" || true
+          
+          echo "Load Balancers:"
+          aws elbv2 describe-load-balancers --query "LoadBalancers[?contains(LoadBalancerName, 'mana-food')].LoadBalancerName" || true
+          
+          echo "ECR Repositories:"
+          aws ecr describe-repositories --query "repositories[?contains(repositoryName, 'mana-food')].repositoryName" || true
