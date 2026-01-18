@@ -21,7 +21,7 @@ spec:
         image: ${ORDER_SERVICE_IMAGE}
         imagePullPolicy: Always
         ports:
-        - containerPort: 8080
+        - containerPort: 8081 
           name: http
         resources:
           requests:
@@ -60,7 +60,7 @@ spec:
         - name: JWT_AUDIENCE
           value: "ManaFoodUsers"
         - name: PRODUCT_SERVICE_URL
-          value: "product-service:80"
+          value: "http://product-service:80"  
         livenessProbe:
           httpGet:
             path: /actuator/health/liveness

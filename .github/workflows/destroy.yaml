@@ -98,6 +98,94 @@ jobs:
             -var="jwt_secret_key=${{ secrets.JWT_SECRET }}" \
             -var="bucket_state_name=${{ secrets.TERRAFORM_STATE_BUCKET }}" \
             -auto-approve
+      
+      - name: Force Delete KMS Keys
+        if: always()
+        run: |
+          echo "🔑 Deletando todas as KMS Keys custom do projeto..."
+          
+          # Listar e agendar deleção de todas as keys custom relacionadas ao EKS
+          aws kms list-keys --region us-east-1 --query 'Keys[].KeyId' --output text | while read key; do
+            # Verificar se é customer managed
+            manager=$(aws kms describe-key --key-id $key --region us-east-1 --query 'KeyMetadata.KeyManager' --output text 2>/dev/null || echo "")
+            description=$(aws kms describe-key --key-id $key --region us-east-1 --query 'KeyMetadata.Description' --output text 2>/dev/null || echo "")
+            
+            # Deletar apenas keys do projeto mana-food
+            if [ "$manager" == "CUSTOMER" ] && [[ "$description" == *"mana-food"* ]]; then
+              echo "Agendando deleção de KMS Key: $key ($description)"
+              aws kms schedule-key-deletion --key-id $key --pending-window-in-days 7 --region us-east-1 2>&1 | grep -v "pending deletion" || true
+            fi
+          done
+
+      - name: Cleanup All CloudWatch Log Groups
+        if: always()
+        run: |
+          echo "📊 Deletando todos os Log Groups do projeto..."
+          
+          aws logs describe-log-groups --region us-east-1 --query 'logGroups[?contains(logGroupName, `mana-food`)].logGroupName' --output text | \
+            xargs -r -n1 -I {} aws logs delete-log-group --log-group-name {} --region us-east-1 || true
+          
+          # Log groups do EKS
+          aws logs delete-log-group --log-group-name /aws/eks/mana-food-eks/cluster --region us-east-1 || true
+
+      - name: Release Orphaned Elastic IPs
+        if: always()
+        run: |
+          echo "🌐 Liberando Elastic IPs órfãos..."
+          
+          # Encontrar EIPs não associados
+          aws ec2 describe-addresses --region us-east-1 --query 'Addresses[?AssociationId==`null`].AllocationId' --output text | \
+            xargs -r -n1 -I {} aws ec2 release-address --allocation-id {} --region us-east-1 || true
+
+      - name: Cleanup IAM Roles (órfãos)
+        if: always()
+        run: |
+          echo "👤 Limpando IAM Roles órfãos..."
+          
+          for role in $(aws iam list-roles --query 'Roles[?contains(RoleName, `mana-food`)].RoleName' --output text); do
+            echo "Deletando role: $role"
+            
+            # Detach managed policies
+            aws iam list-attached-role-policies --role-name $role --query 'AttachedPolicies[].PolicyArn' --output text | \
+              xargs -r -n1 -I {} aws iam detach-role-policy --role-name $role --policy-arn {} || true
+            
+            # Delete inline policies
+            aws iam list-role-policies --role-name $role --query 'PolicyNames[]' --output text | \
+              xargs -r -n1 -I {} aws iam delete-role-policy --role-name $role --policy-name {} || true
+            
+            # Delete role
+            aws iam delete-role --role-name $role || true
+          done
+
+      - name: Cost Estimation After Destroy
+        if: always()
+        run: |
+          echo "💰 Verificando recursos que ainda podem gerar custo..."
+          echo ""
+          echo "=== RESUMO DE CUSTOS ESPERADOS ==="
+          
+          # KMS Keys
+          kms_count=$(aws kms list-keys --region us-east-1 --query 'length(Keys)' --output text)
+          echo "KMS Keys: ~$kms_count encontradas (verificar se foram agendadas para deleção)"
+          
+          # NAT Gateways
+          nat_count=$(aws ec2 describe-nat-gateways --region us-east-1 --filter "Name=state,Values=available" --query 'length(NatGateways)' --output text)
+          echo "NAT Gateways: $nat_count (\$32/mês cada)"
+          
+          # Load Balancers
+          lb_count=$(aws elbv2 describe-load-balancers --region us-east-1 --query 'length(LoadBalancers)' --output text)
+          echo "Load Balancers: $lb_count (\$16/mês cada)"
+          
+          # EC2 Instances
+          ec2_count=$(aws ec2 describe-instances --region us-east-1 --filters "Name=instance-state-name,Values=running" --query 'length(Reservations[].Instances[])' --output text)
+          echo "EC2 Instances (running): $ec2_count"
+          
+          # RDS
+          rds_count=$(aws rds describe-db-clusters --region us-east-1 --query 'length(DBClusters)' --output text)
+          echo "RDS Clusters: $rds_count"
+          
+          echo ""
+          echo "✅ Se todos os valores acima forem 0, os custos devem parar de crescer!"
 
       - name: Cleanup Orphaned Resources (Retry)
         if: always()
