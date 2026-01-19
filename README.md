@@ -3,7 +3,7 @@
 Infraestrutura como código (Terraform) da plataforma Mana Food: VPC, EKS, Aurora MySQL (Serverless v2), Lambda, API Gateway, IAM, KMS, CloudWatch e manifests Kubernetes.
 
 ## Diagrama do fluxo de Infraestrutura
-![Diagrama do fluxo de Infraestrutura](assets/infra-diagram.jpeg)
+![Diagrama do fluxo de Infraestrutura](assets/infra-diagram.png)
 
 ## 🏗️ Arquitetura
 
